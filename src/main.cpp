@@ -25,7 +25,7 @@ void plan1order() {
     control_space->setBounds(control_bounds);
 
     auto space_information = std::make_shared<oc::SpaceInformation>(state_space, control_space);
-    auto state_validity_checker = std::make_shared<ob::AllValidStateValidityChecker>(space_information);
+    auto state_validity_checker = std::make_shared<IRLMPNet::DifferentialCarChecker>(space_information, 0);
     space_information->setStateValidityChecker(state_validity_checker);
 
     auto propagator = std::make_shared<IRLMPNet::DifferentialCar1OrderPropagator>(space_information);
