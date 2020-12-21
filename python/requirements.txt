@@ -1,0 +1,7 @@
+numpy
+scipy
+torch
+tqdm
+tianshou
+matplotlib
+pytest==3.1
