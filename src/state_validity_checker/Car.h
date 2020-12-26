@@ -28,7 +28,7 @@ public:
         _car_radius = sqrt(_half_x * _half_x + _half_y * _half_y);
 
         // read obstacle centers
-        std::string obs_file = boost::str(boost::format("data/obstacle/car_obs/csv/obs_%1%.csv") % obs_index);
+        std::string obs_file = boost::str(boost::format("data/obstacle/car/obs_%1%.csv") % obs_index);
         std::ifstream input_csv(obs_file);
 
         obstacle_centers_.resize(0);

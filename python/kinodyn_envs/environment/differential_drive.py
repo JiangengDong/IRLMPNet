@@ -4,7 +4,7 @@ import numpy as np
 import gym
 from PIL import Image
 
-from kinodyn_envs.system.differential_drive import DifferentialDrive
+from kinodyn_envs.system.differential_drive import DifferentialDrive, DifferentialDrive1Order
 from kinodyn_envs.visual.differential_drive import plot_differential_drive
 
 
@@ -41,17 +41,14 @@ class DifferentialDriveFreeEnv(gym.Env):
             self._state = new_state
 
         # check if done
-        diff = self._system.diff(self._state, self._goal) 
+        diff = self._system.diff(self._state, self._goal)
         dist = np.linalg.norm(diff*np.array([1.0, 1.0, 0.1, 0.0, 0.0]))
         if self._step_count == self.spec["max_step"] or dist < 0.01:
             self._done = True
-        
-        reward = - np.log(dist+0.01) + 0.1*np.abs(self._state[3]) # - 0.5*np.abs(self._state[4])
+
+        reward = - np.log(dist+0.01) + 0.1*np.abs(self._state[3])  # - 0.5*np.abs(self._state[4])
 
         return np.concatenate([self._state, self._goal]), reward, self._done, {}
-
-
-
 
     def reset(self):
         # random start
@@ -90,7 +87,7 @@ class DifferentialDriveFreeEnv(gym.Env):
         self.action_space.seed(seed)
 
 
-class DifferentialDriveFreeSparseEnv(gym.Env):
+class DifferentialDrive1OrderFreeEnv(gym.Env):
     spec = {"dt": 0.1, "max_step": 150}
     action_space = gym.spaces.Box(low=DifferentialDrive.control_bound[:, 0],
                                   high=DifferentialDrive.control_bound[:, 1])
@@ -98,9 +95,9 @@ class DifferentialDriveFreeSparseEnv(gym.Env):
                                        high=np.tile(DifferentialDrive.state_bound[:, 1], 2))
 
     def __init__(self):
-        super(DifferentialDriveFreeSparseEnv, self).__init__()
+        super(DifferentialDrive1OrderFreeEnv, self).__init__()
 
-        self._system = DifferentialDrive()
+        self._system = DifferentialDrive1Order()
         self._state = self.observation_space.sample()
         self._goal = self.observation_space.sample()
         self._step_count = 0
@@ -124,19 +121,18 @@ class DifferentialDriveFreeSparseEnv(gym.Env):
 
         # check if done
         diff = self._system.diff(self._state, self._goal)
-        dist = np.linalg.norm(diff[:3])
-        if self._step_count == self.spec["max_step"] or dist < 0.05:
+        dist = np.linalg.norm(diff*np.array([1.0, 1.0, 0.1]))
+        if self._step_count == self.spec["max_step"] or dist < 0.01:
             self._done = True
-        
-        reward = - (dist > 0.05).astype(np.float32)
+
+        reward = - np.log(dist+0.01) + 0.1*np.abs(action[0])  # - 0.5*np.abs(self._state[4])
 
         return np.concatenate([self._state, self._goal]), reward, self._done, {}
-
 
     def reset(self):
         # random start
         for _ in range(50):
-            ob = np.random.rand(10)*2-1
+            ob = np.random.rand(6)*2-1
             self._state, self._goal = np.split(ob, 2)
             if self._system.is_valid(self._state) and self._system.is_valid(self._goal):
                 break

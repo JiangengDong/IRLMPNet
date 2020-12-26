@@ -1,1 +1,1 @@
-from kinodyn_envs.environment.differential_drive import DifferentialDriveFreeEnv, DifferentialDriveFreeSparseEnv
+from kinodyn_envs.environment.differential_drive import DifferentialDriveFreeEnv, DifferentialDrive1OrderFreeEnv

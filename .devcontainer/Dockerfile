@@ -1,4 +1,4 @@
-FROM nvidia/cuda:10.2-runtime-ubuntu18.04
+FROM nvidia/cuda:11.0-cudnn8-devel-ubuntu18.04
 
 # dependencies
 RUN apt-get update && \
@@ -12,6 +12,15 @@ ENV LLVM_CONFIG=/usr/bin/llvm-config-10 \
     LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en
 
+# install OMPL
+WORKDIR /usr/local/src
+RUN wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh && \
+    chmod a+x ./install-ompl-ubuntu.sh && \
+    ./install-ompl-ubuntu.sh && \
+    apt-get autoremove -y && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*
+
 # add a user "arclab" with password "arclab"
 RUN useradd -m arclab && \
     echo "arclab:arclab" | chpasswd && \
@@ -19,4 +28,4 @@ RUN useradd -m arclab && \
 # change user and workdir
 USER arclab
 WORKDIR /home/arclab
-RUN pip3 install wheel pylint rope autopep8 numpy
+RUN pip3 install wheel pylint rope autopep8

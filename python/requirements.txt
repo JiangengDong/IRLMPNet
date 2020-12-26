@@ -2,6 +2,10 @@ numpy
 scipy
 torch
 tqdm
-tianshou
 matplotlib
 pytest==3.1
+tensorboard
+click
+gym
+imageio
+h5py

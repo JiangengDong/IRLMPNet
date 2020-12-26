@@ -4,21 +4,14 @@
 	"name": "IRLMPNet",
 	"build": {
 		"dockerfile": "Dockerfile",
-		"context": "..",
+		"context": ".",
 	},
-	"containerEnv": {
-		"DISPLAY": "${localEnv:DISPLAY}"
-	},
-	"mounts": [
-		"type=bind,source=/tmp/.X11-unix,target=/tmp/.X11-unix"
-	],
 	"runArgs": [
 		"--gpus=all"
 	],
 	// Set *default* container specific settings.json values on container create.
 	"settings": {
 		"terminal.integrated.shell.linux": "/bin/bash",
-		"C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
         "python.pythonPath": "/usr/bin/python3"
 	},
 	// Add the IDs of extensions you want installed when the container is created.
@@ -31,6 +24,4 @@
 	],
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	"forwardPorts": [],
-	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip3 install --user -r requirements.txt"
 }

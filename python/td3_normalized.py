@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 import gym
-from kinodyn_envs import DifferentialDriveFreeEnv
+from kinodyn_envs import DifferentialDriveFreeEnv, DifferentialDrive1OrderFreeEnv
 
 from typing import Dict, Tuple
 from tqdm import tqdm
@@ -144,64 +144,6 @@ class Actor(nn.Module):
         x = torch.tanh(x) # TODO: remove this layer
 
         return x
-
-
-# class Actor(nn.Module):
-#     def __init__(self, state_dim: int, action_dim: int):
-#         """
-#         Initialize the network
-#         param: state_dim : Size of the state space
-#         param: action_dim: Size of the action space
-#         """
-#         super(Actor, self).__init__()
-
-#         hidden_dim = 256
-#         self.net = nn.Sequential(
-#             nn.Linear(state_dim, hidden_dim), nn.ReLU(), 
-#             nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), 
-#             nn.Linear(hidden_dim, action_dim)
-#         )
-
-#     def forward(self, state: torch.Tensor) -> torch.Tensor:
-#         """
-#         Define the forward pass
-#         param: state: The state of the environment
-#         """
-#         return self.net.forward(state)
-
-
-# class Critic(nn.Module):
-#     def __init__(self, state_dim: int, action_dim: int):
-#         """
-#         Initialize the critic
-#         param: state_dim : Size of the state space
-#         param: action_dim : Size of the action space
-#         """
-#         super(Critic, self).__init__()
-
-#         hidden_dim_1 = 400
-#         hidden_dim_2 = 300
-
-#         self.fc1 = nn.Linear(state_dim, hidden_dim_1)
-#         self.fc2 = nn.Linear(hidden_dim_1 + action_dim, hidden_dim_2)
-#         self.fc3 = nn.Linear(hidden_dim_2, 1)
-
-#         self.fc1.weight.data.uniform_(-1 / np.sqrt(state_dim), 1 / np.sqrt(state_dim))
-#         self.fc2.weight.data.uniform_(-1 / np.sqrt(hidden_dim_1 + action_dim), 1 / np.sqrt(hidden_dim_1 + action_dim))
-#         self.fc3.weight.data.uniform_(-3e-3, 3e-3)
-
-#     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-#         """
-#         Define the forward pass of the critic
-#         """
-#         x = state
-#         x = self.fc1(x)
-#         x = F.relu(x)
-#         x = torch.cat([x, action], dim=-1)
-#         x = self.fc2(x)
-#         x = F.relu(x)
-#         x = self.fc3(x)
-#         return x
 
 class Critic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
@@ -417,13 +359,13 @@ def generate_movie(env: gym.Env, policy: nn.Module, gif_path: str):
 
 if __name__ == "__main__":
     # Define the environment
-    env = DifferentialDriveFreeEnv()
+    env = DifferentialDrive1OrderFreeEnv()
     task = "train"
 
     if task == "train":
         TD3_object = TD3(
             env=env,
-            state_dim=10,
+            state_dim=6,
             action_dim=2,
             critic_lr=1e-3,
             actor_lr=1e-3,
@@ -431,10 +373,13 @@ if __name__ == "__main__":
             batch_size=100,
         )
         # Train the policy
-        log_dir = "data/log/differential_free-TD3/"
+        log_dir = os.path.join("./data", "log", "rl", "car_free-TD3")
+        model_filename = os.path.join("./data", "pytorch_model", "rl", "car_free-TD3.pt")
+        os.makedirs(os.path.split(model_filename)[0], exist_ok=True)
         policy = TD3_object.train(200000, log_dir)
-        torch.save(policy, "data/pytorch_model/differential_free-TD3-4.pt")
+        torch.save(policy, model_filename)
 
-    policy = torch.load("data/pytorch_model/differential_free-TD3-4.pt").cuda()
+    policy = torch.load(model_filename).cuda()
+    img_filename = os.path.join("data", "img", "differential_free-TD3-episode{}.gif")
     for i in tqdm(range(10)):
-        generate_movie(env, policy, f"data/img_pack/differential_free-TD3-episode{i}-4.gif")
+        generate_movie(env, policy, img_filename.format(i))
