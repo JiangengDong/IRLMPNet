@@ -1,13 +1,15 @@
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
-
-from tqdm import tqdm
 import os
-import numpy as np
-import h5py
 import pickle
+
+import h5py
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.utils.data
+from torch import nn
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+import utils
 
 
 class VoxelEncoder(nn.Module):
@@ -55,6 +57,7 @@ class PNet(nn.Module):
         out = self.fc(x)
         return out
 
+
 class MPNet(torch.jit.ScriptModule):
     def __init__(self, ae_input_size=32, ae_output_size=64,
                  in_channels=1,
@@ -65,8 +68,8 @@ class MPNet(torch.jit.ScriptModule):
         self.encoder = VoxelEncoder(input_size=ae_input_size,
                                     output_size=ae_output_size,
                                     in_channels=in_channels)
-        self.pnet = PNet(input_size=ae_output_size+state_size * 2,
-                         output_size=state_size+control_size)
+        self.pnet = PNet(input_size=ae_output_size + state_size * 2,
+                         output_size=state_size + control_size)
 
     def forward(self, x, obs):
         if obs is not None:
@@ -123,21 +126,36 @@ def convert_traj_to_mpnet_format(trajs):
             total_length += trajs[str(env_id)][str(traj_id)].len() - 1
 
     # allocate memory and load
-    all_input = np.zeros((total_length, 2*state_dim))
+    all_input = np.zeros((total_length, 2 * state_dim))
     all_output = np.zeros((total_length, state_dim))
-    all_voxel_id = np.zeros((total_length, ), dtype=np.int)
+    all_voxel_id = np.zeros((total_length,), dtype=np.int)
     offset = 0
     for env_id in range(10):
         for traj_id in range(1000):
             traj = trajs[str(env_id)][str(traj_id)]
             N = traj.len() - 1
-            all_input[offset:offset+N, :state_dim] = traj[:-1]
-            all_input[offset:offset+N, state_dim:] = traj[-1]
-            all_output[offset:offset+N] = traj[1:]
-            all_voxel_id[offset:offset+N] = env_id
+            all_input[offset:offset + N, :state_dim] = traj[:-1]
+            all_input[offset:offset + N, state_dim:] = traj[-1]
+            all_output[offset:offset + N] = traj[1:]
+            all_voxel_id[offset:offset + N] = env_id
             offset += N
 
     return all_input, all_output, all_voxel_id
+
+
+def load_data(data_dir, system_name):
+    voxels = load_voxels(data_dir, system_name)
+
+    # trajs = load_trajs(data_dir, system_name)
+    # input_array, output_array, voxel_id_array = convert_traj_to_mpnet_format(trajs)
+    # trajs.close()
+
+    traj = np.load("./data/traj/car/car_obs_path_data.npy")
+    voxel_id_array, input_array = np.split(traj, [1], axis=1)
+    voxel_id_array = voxel_id_array.astype(np.int).flatten()
+    output_array = np.load("./data/traj/car/car_obs_gt.npy")
+
+    return input_array, output_array, voxel_id_array, voxels
 
 
 class DataLoader:
@@ -156,20 +174,10 @@ class DataLoader:
 
     def __next__(self, *args, **kwargs):
         input_sample, output_sample, voxel_id_sample = next(self.data_iterator)
-        return input_sample, output_sample, self.voxel_tensor[voxel_id_sample]
+        return input_sample, output_sample, self.voxel_tensor[voxel_id_sample.long()]
 
     def __len__(self, *args, **kwargs):
-        return len(self.data_iterator)
-
-
-def load_data(data_dir, system_name):
-    voxels = load_voxels(data_dir, system_name)
-
-    trajs = load_trajs(data_dir, system_name)
-    input_array, output_array, voxel_id_array = convert_traj_to_mpnet_format(trajs)
-    trajs.close()
-
-    return input_array, output_array, voxel_id_array, voxels
+        return len(self.data_loader)
 
 
 def main(data_dir="./data", system_name="car"):
@@ -177,8 +185,8 @@ def main(data_dir="./data", system_name="car"):
 
     # split into test loader and train loader
     N = input_array.shape[0]
-    train_indices = np.random.choice(N, 4*N//5)
-    train_mask = np.zeros((N, ), dtype=np.bool)
+    train_indices = np.random.choice(N, 9 * N // 10)
+    train_mask = np.zeros((N,), dtype=np.bool)
     train_mask[train_indices] = True
     train_loader = DataLoader(input_array[train_mask],
                               output_array[train_mask],
@@ -199,29 +207,43 @@ def main(data_dir="./data", system_name="car"):
     # construct network
     mpnet = MPNet(ae_input_size=32, ae_output_size=64, in_channels=1, state_size=3, control_size=0).cuda()
     optimizer = torch.optim.Adam(mpnet.parameters())
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.9)
 
     log_dir = os.path.join(data_dir, "log", "mpnet", system_name)
-    logger = SummaryWriter(log_dir)
-    model_filename = os.path.join(data_dir, "pytorch_model", "mpnet", system_name, "mpnet.pt")
+    utils.ensure_folder_exist(log_dir)
     model_script_filename = os.path.join(data_dir, "pytorch_model", "mpnet", system_name, "mpnet_script.pt")
-    os.makedirs(os.path.split(model_filename)[0], exist_ok=True)
+    utils.ensure_folder_exist(model_script_filename)
+    logger = SummaryWriter(log_dir)
 
     # main loop
     global_step = 0
-    for i_epoch in range(100):
-        for input_tensor, output_tensor, voxel_tensor in tqdm(train_loader):
+    progress_bar = tqdm(total=1000, position=0)
+    for i_epoch in range(1000):
+        for input_tensor, output_tensor, voxel_tensor in tqdm(train_loader, "train", position=1, leave=False):
             optimizer.zero_grad()
             loss = F.mse_loss(mpnet.forward(input_tensor, voxel_tensor), output_tensor)
             loss.backward()
             optimizer.step()
 
             if global_step % 10 == 0:
-                logger.add_scalar("loss", loss, global_step)
+                logger.add_scalar("training_loss", loss, global_step)
 
             global_step += 1
+        scheduler.step()
 
-        
-        mpnet.save(model_script_filename)
+        mpnet.eval()
+        with torch.no_grad():
+            count_temp = 0
+            loss = torch.zeros(()).cuda()
+            for input_tensor, output_tensor, voxel_tensor in tqdm(test_loader, "test", position=1, leave=False):
+                loss += F.mse_loss(mpnet.forward(input_tensor, voxel_tensor), output_tensor)
+                count_temp += 1
+            logger.add_scalar("testing_loss", loss/count_temp, global_step)
+        mpnet.train()
+
+        mpnet.save(model_script_filename+".{}".format(i_epoch//10))
+        progress_bar.set_postfix({'eval_loss': '{0:1.5f}'.format(loss.cpu().numpy()/count_temp)})
+        progress_bar.update()
 
 
 if __name__ == '__main__':

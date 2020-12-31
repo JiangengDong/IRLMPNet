@@ -6,6 +6,7 @@ import numpy as np
 import os
 import tqdm
 from matplotlib import pyplot as plt
+import torch
 
 
 def load_pickle(path: str) -> np.ndarray:
@@ -86,11 +87,11 @@ def split_voxel_npy_to_voxel_csv():
 
     
 def view_path_data():
-    path_data = np.load("data/training_path/cartpole/cartpole_obs_path_data.npy")
-    gt_data = np.load("data/training_path/cartpole/cartpole_obs_gt.npy")
+    path_data = np.load("data/traj/car/car_obs_path_data.npy")
+    gt_data = np.load("data/traj/car/car_obs_gt.npy")
     pass # use debugger here
 
 
 if __name__ == "__main__":
-    data = load_pickle("./data/traj/car/0/path_0.pkl")
+    view_path_data()
     pass
