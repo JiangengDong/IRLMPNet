@@ -108,13 +108,12 @@ def main():
     mpnet.cuda()
     checkpoint = torch.load("./data/pytorch_model/mpnet/car/kmpnet_epoch_950_direction_0_step_500.pkl", map_location='cuda:0')
     mpnet.load_state_dict(checkpoint["state_dict"])
-    mpnet.eval()
 
     # construct input
     voxels = torch.from_numpy(np.random.randn(1, 1, 32, 32).astype(np.float32)).cuda()
     state = torch.from_numpy(np.random.randn(1, 6).astype(np.float32)).cuda()
     script_module = torch.jit.trace(mpnet, (state, voxels))
-    script_module.save("./data/pytorch_model/mpnet/car/mpnet_script_eval.pt")
+    script_module.save("./data/pytorch_model/mpnet/car/mpnet_script.pt")
 
 
 

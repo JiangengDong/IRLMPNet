@@ -89,10 +89,10 @@ class DifferentialDriveFreeEnv(gym.Env):
 
 class DifferentialDrive1OrderFreeEnv(gym.Env):
     spec = {"dt": 0.1, "max_step": 150}
-    action_space = gym.spaces.Box(low=DifferentialDrive.control_bound[:, 0],
-                                  high=DifferentialDrive.control_bound[:, 1])
-    observation_space = gym.spaces.Box(low=np.tile(DifferentialDrive.state_bound[:, 0], 2),
-                                       high=np.tile(DifferentialDrive.state_bound[:, 1], 2))
+    action_space = gym.spaces.Box(low=DifferentialDrive1Order.control_bound[:, 0],
+                                  high=DifferentialDrive1Order.control_bound[:, 1])
+    observation_space = gym.spaces.Box(low=np.tile(DifferentialDrive1Order.state_bound[:, 0], 2),
+                                       high=np.tile(DifferentialDrive1Order.state_bound[:, 1], 2))
 
     def __init__(self):
         super(DifferentialDrive1OrderFreeEnv, self).__init__()
@@ -125,7 +125,7 @@ class DifferentialDrive1OrderFreeEnv(gym.Env):
         if self._step_count == self.spec["max_step"] or dist < 0.01:
             self._done = True
 
-        reward = - np.log(dist+0.01) + 0.1*np.abs(action[0])  # - 0.5*np.abs(self._state[4])
+        reward = (- dist - 0.2)*0.1  # - 0.5*np.abs(self._state[4])
 
         return np.concatenate([self._state, self._goal]), reward, self._done, {}
 

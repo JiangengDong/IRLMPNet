@@ -34,18 +34,19 @@
 
 /* Authors: Zakary Littlefield */
 
-#include "planner/SSTRL.h"
-#include "ompl/base/goals/GoalSampleableRegion.h"
-#include "ompl/base/objectives/MinimaxObjective.h"
-#include "ompl/base/objectives/MaximizeMinClearanceObjective.h"
-#include "ompl/base/objectives/PathLengthOptimizationObjective.h"
-#include "ompl/base/objectives/MechanicalWorkOptimizationObjective.h"
-#include "ompl/tools/config/SelfConfig.h"
-#include "ompl/control/spaces/RealVectorControlSpace.h"
+#include "planner/RLMPNet.h"
+#include <ompl/base/goals/GoalSampleableRegion.h>
+#include <ompl/base/objectives/MinimaxObjective.h>
+#include <ompl/base/objectives/MaximizeMinClearanceObjective.h>
+#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
+#include <ompl/base/objectives/MechanicalWorkOptimizationObjective.h>
+#include <ompl/tools/config/SelfConfig.h>
+#include <ompl/control/spaces/RealVectorControlSpace.h>
 #include <limits>
 
-ompl::control::SSTRL::SSTRL(const SpaceInformationPtr &si) : base::Planner(si, "SSTRL"), 
-    policy_("data/pytorch_model/differential_free-TD3-4.pt", si_->getStateDimension(), 2)
+ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si) : base::Planner(si, "RLMPNet"),
+                                                                 policy_(si, "data/pytorch_model/rl/car_free-TD3-unnorm-script.pt"),
+                                                                 mpnet_sampler_(std::make_shared<IRLMPNet::MPNetSampler>(si->getStateSpace().get(), "data/pytorch_model/mpnet/car/mpnet_script.pt"))
 {
     specs_.approximateSolutions = true;
     siC_ = si.get();
@@ -53,18 +54,18 @@ ompl::control::SSTRL::SSTRL(const SpaceInformationPtr &si) : base::Planner(si, "
     prevSolutionControls_.clear();
     prevSolutionSteps_.clear();
 
-    Planner::declareParam<double>("goal_bias", this, &SSTRL::setGoalBias, &SSTRL::getGoalBias, "0.:.05:1.");
-    Planner::declareParam<double>("selection_radius", this, &SSTRL::setSelectionRadius, &SSTRL::getSelectionRadius, "0.:.1:"
+    Planner::declareParam<double>("goal_bias", this, &RLMPNet::setGoalBias, &RLMPNet::getGoalBias, "0.:.05:1.");
+    Planner::declareParam<double>("selection_radius", this, &RLMPNet::setSelectionRadius, &RLMPNet::getSelectionRadius, "0.:.1:"
                                                                                                                 "100");
-    Planner::declareParam<double>("pruning_radius", this, &SSTRL::setPruningRadius, &SSTRL::getPruningRadius, "0.:.1:100");
+    Planner::declareParam<double>("pruning_radius", this, &RLMPNet::setPruningRadius, &RLMPNet::getPruningRadius, "0.:.1:100");
 }
 
-ompl::control::SSTRL::~SSTRL()
+ompl::control::RLMPNet::~RLMPNet()
 {
     freeMemory();
 }
 
-void ompl::control::SSTRL::setup()
+void ompl::control::RLMPNet::setup()
 {
     base::Planner::setup();
     if (!nn_)
@@ -103,7 +104,7 @@ void ompl::control::SSTRL::setup()
     prevSolutionCost_ = opt_->infiniteCost();
 }
 
-void ompl::control::SSTRL::clear()
+void ompl::control::RLMPNet::clear()
 {
     Planner::clear();
     sampler_.reset();
@@ -117,7 +118,7 @@ void ompl::control::SSTRL::clear()
         prevSolutionCost_ = opt_->infiniteCost();
 }
 
-void ompl::control::SSTRL::freeMemory()
+void ompl::control::RLMPNet::freeMemory()
 {
     if (nn_)
     {
@@ -156,7 +157,7 @@ void ompl::control::SSTRL::freeMemory()
     prevSolutionSteps_.clear();
 }
 
-ompl::control::SSTRL::Motion *ompl::control::SSTRL::selectNode(ompl::control::SSTRL::Motion *sample)
+ompl::control::RLMPNet::Motion *ompl::control::RLMPNet::selectNode(ompl::control::RLMPNet::Motion *sample)
 {
     std::vector<Motion *> ret;
     Motion *selected = nullptr;
@@ -185,7 +186,7 @@ ompl::control::SSTRL::Motion *ompl::control::SSTRL::selectNode(ompl::control::SS
     return selected;
 }
 
-ompl::control::SSTRL::Witness *ompl::control::SSTRL::findClosestWitness(ompl::control::SSTRL::Motion *node)
+ompl::control::RLMPNet::Witness *ompl::control::RLMPNet::findClosestWitness(ompl::control::RLMPNet::Motion *node)
 {
     if (witnesses_->size() > 0)
     {
@@ -209,21 +210,25 @@ ompl::control::SSTRL::Witness *ompl::control::SSTRL::findClosestWitness(ompl::co
     }
 }
 
-ompl::base::PlannerStatus ompl::control::SSTRL::solve(const base::PlannerTerminationCondition &ptc)
+ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTerminationCondition &ptc)
 {
     checkValidity();
     base::Goal *goal = pdef_->getGoal().get();
     auto *goal_s = dynamic_cast<base::GoalSampleableRegion *>(goal);
+    auto current_state = si_->allocState(); 
+    auto goal_state = si_->allocState();
 
     while (const base::State *st = pis_.nextStart())
     {
         auto *motion = new Motion(siC_);
         si_->copyState(motion->state_, st);
+        si_->copyState(current_state, st);
         siC_->nullControl(motion->control_);
         nn_->add(motion);
         motion->accCost_ = opt_->identityCost();
         findClosestWitness(motion);
     }
+    goal_s->sampleGoal(goal_state);
 
     if (nn_->size() == 0)
     {
@@ -252,24 +257,18 @@ ompl::base::PlannerStatus ompl::control::SSTRL::solve(const base::PlannerTermina
 
     while (ptc == false)
     {
-        /* sample random state (with goal biasing) */
-        if (goal_s && rng_.uniform01() < goalBias_ && goal_s->canSample())
-            goal_s->sampleGoal(rstate);
-        else
-            sampler_->sampleUniform(rstate);
+        // /* sample random state (with goal biasing) */
+        // if (goal_s && rng_.uniform01() < goalBias_ && goal_s->canSample())
+        //     goal_s->sampleGoal(rstate);
+        // else
+        //     sampler_->sampleUniform(rstate);
+        mpnet_sampler_->sampleMPNet(current_state, goal_state, rstate);
 
         /* find closest state in the tree */
         Motion *nmotion = selectNode(rmotion);
 
         /* sample a random control that attempts to go towards the random state, and also sample a control duration */
-        std::vector<double> nstate_vec, rstate_vec, state;
-        si_->getStateSpace()->copyToReals(nstate_vec, nmotion->state_);
-        si_->getStateSpace()->copyToReals(rstate_vec, rstate);
-        state.insert(state.end(), nstate_vec.begin(), nstate_vec.end());
-        state.insert(state.end(), rstate_vec.begin(), rstate_vec.end());
-        const auto &rctrl_vec = policy_.act(state);
-        rctrl->as<control::RealVectorControlSpace::ControlType>()->values[0] = rctrl_vec[0];
-        rctrl->as<control::RealVectorControlSpace::ControlType>()->values[1] = rctrl_vec[1];
+        policy_.act(nmotion->state_, rstate, rctrl);
         // controlSampler_->sample(rctrl);
         unsigned int cd = rng_.uniformInt(siC_->getMinControlDuration(), siC_->getMaxControlDuration());
         unsigned int propCd = siC_->propagateWhileValid(nmotion->state_, rctrl, cd, rstate);
@@ -410,7 +409,7 @@ ompl::base::PlannerStatus ompl::control::SSTRL::solve(const base::PlannerTermina
     return {solved, approximate};
 }
 
-void ompl::control::SSTRL::getPlannerData(base::PlannerData &data) const
+void ompl::control::RLMPNet::getPlannerData(base::PlannerData &data) const
 {
     Planner::getPlannerData(data);
 

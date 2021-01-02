@@ -1,6 +1,8 @@
 # project-specific
 data/
 deprecated/
+cmake-build-debug/
+cmake-build-release/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

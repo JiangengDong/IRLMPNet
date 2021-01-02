@@ -34,11 +34,12 @@
 
 /* Authors: Zakary Littlefield */
 
-#ifndef IRLMPNET_PLANNER_SST_RL_H_
-#define IRLMPNET_PLANNER_SST_RL_H_
+#ifndef IRLMPNET_PLANNER_SSTRL_H_
+#define IRLMPNET_PLANNER_SSTRL_H_
 
-#include "ompl/control/planners/PlannerIncludes.h"
-#include "ompl/datastructures/NearestNeighbors.h"
+#include <ompl/control/planners/PlannerIncludes.h>
+#include <ompl/datastructures/NearestNeighbors.h>
+
 #include "planner/torch_interface/Policy.h"
 #include "planner/torch_interface/MPNetSampler.h"
 
@@ -46,13 +47,13 @@ namespace ompl
 {
     namespace control
     {
-        class SSTRL : public base::Planner
+        class RLMPNet : public base::Planner
         {
         public:
             /** \brief Constructor */
-            SSTRL(const SpaceInformationPtr &si);
+            explicit RLMPNet(const SpaceInformationPtr &si);
 
-            ~SSTRL() override;
+            ~RLMPNet() override;
 
             void setup() override;
 
@@ -147,7 +148,7 @@ namespace ompl
                 Motion() = default;
 
                 /** \brief Constructor that allocates memory for the state and the control */
-                Motion(const SpaceInformation *si)
+                explicit Motion(const SpaceInformation *si)
                   : state_(si->allocState()), control_(si->allocControl())
                 {
                 }
@@ -189,7 +190,7 @@ namespace ompl
             public:
                 Witness() = default;
 
-                Witness(const SpaceInformation *si) : Motion(si)
+                explicit Witness(const SpaceInformation *si) : Motion(si)
                 {
                 }
                 base::State *getState() const override
@@ -266,6 +267,8 @@ namespace ompl
 
             /** \brief policy for steering. */
             IRLMPNet::Policy policy_;
+
+            IRLMPNet::MPNetSampler::Ptr mpnet_sampler_;
         };
     }
 }
