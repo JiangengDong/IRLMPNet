@@ -36,6 +36,13 @@ namespace IRLMPNet {
                 space_information->setStateValidityChecker(collision_checker);
                 space_information->setPropagationStepSize(0.1);
                 space_information->setMinMaxControlDuration(1, 10); // TODO: check if this is good
+
+                space_information->setup();
+            }
+
+            // TODO: add interface for python
+            bool isValid(const ob::State* state) const {
+                return space_information->isValid(state);
             }
         };
     }

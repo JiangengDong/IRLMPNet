@@ -1,1 +1,6 @@
 # IRLMPNet
+
+## Note
+
+1. Always compile pytorch from source. 
+1. Export torchscript on the computer where you run it.

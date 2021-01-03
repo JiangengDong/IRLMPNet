@@ -44,10 +44,10 @@
 #include <ompl/control/spaces/RealVectorControlSpace.h>
 #include <limits>
 
-ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si) : base::Planner(si, "RLMPNet"),
-                                                                 policy_(si, "data/pytorch_model/rl/car_free-TD3-unnorm-script.pt"),
-                                                                 mpnet_sampler_(std::make_shared<IRLMPNet::MPNetSampler>(si->getStateSpace().get(), "data/pytorch_model/mpnet/car/mpnet_script.pt"))
-{
+ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si) :
+        base::Planner(si, "RLMPNet"),
+        policy_(si, "data/pytorch_model/rl/car_free-TD3-unnorm-script.pt"),
+        mpnet_sampler_(std::make_shared<IRLMPNet::MPNetSampler>(si->getStateSpace().get(), "data/pytorch_model/mpnet/car/mpnet_script.pt")) {
     specs_.approximateSolutions = true;
     siC_ = si.get();
     prevSolution_.clear();
@@ -56,35 +56,29 @@ ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si) : base::Planner(s
 
     Planner::declareParam<double>("goal_bias", this, &RLMPNet::setGoalBias, &RLMPNet::getGoalBias, "0.:.05:1.");
     Planner::declareParam<double>("selection_radius", this, &RLMPNet::setSelectionRadius, &RLMPNet::getSelectionRadius, "0.:.1:"
-                                                                                                                "100");
+                                                                                                                        "100");
     Planner::declareParam<double>("pruning_radius", this, &RLMPNet::setPruningRadius, &RLMPNet::getPruningRadius, "0.:.1:100");
 }
 
-ompl::control::RLMPNet::~RLMPNet()
-{
+ompl::control::RLMPNet::~RLMPNet() {
     freeMemory();
 }
 
-void ompl::control::RLMPNet::setup()
-{
+void ompl::control::RLMPNet::setup() {
     base::Planner::setup();
     if (!nn_)
         nn_.reset(tools::SelfConfig::getDefaultNearestNeighbors<Motion *>(this));
-    nn_->setDistanceFunction([this](const Motion *a, const Motion *b)
-                             {
-                                 return distanceFunction(a, b);
-                             });
+    nn_->setDistanceFunction([this](const Motion *a, const Motion *b) {
+        return distanceFunction(a, b);
+    });
     if (!witnesses_)
         witnesses_.reset(tools::SelfConfig::getDefaultNearestNeighbors<Motion *>(this));
-    witnesses_->setDistanceFunction([this](const Motion *a, const Motion *b)
-                                    {
-                                        return distanceFunction(a, b);
-                                    });
+    witnesses_->setDistanceFunction([this](const Motion *a, const Motion *b) {
+        return distanceFunction(a, b);
+    });
 
-    if (pdef_)
-    {
-        if (pdef_->hasOptimizationObjective())
-        {
+    if (pdef_) {
+        if (pdef_->hasOptimizationObjective()) {
             opt_ = pdef_->getOptimizationObjective();
             if (dynamic_cast<base::MaximizeMinClearanceObjective *>(opt_.get()) ||
                 dynamic_cast<base::MinimaxObjective *>(opt_.get()))
@@ -92,9 +86,7 @@ void ompl::control::RLMPNet::setup()
                           "functions w.r.t. state and control. This optimization objective will result in undefined "
                           "behavior",
                           getName().c_str());
-        }
-        else
-        {
+        } else {
             OMPL_WARN("%s: No optimization object set. Using path length", getName().c_str());
             opt_ = std::make_shared<base::PathLengthOptimizationObjective>(si_);
             pdef_->setOptimizationObjective(opt_);
@@ -104,8 +96,7 @@ void ompl::control::RLMPNet::setup()
     prevSolutionCost_ = opt_->infiniteCost();
 }
 
-void ompl::control::RLMPNet::clear()
-{
+void ompl::control::RLMPNet::clear() {
     Planner::clear();
     sampler_.reset();
     controlSampler_.reset();
@@ -118,14 +109,11 @@ void ompl::control::RLMPNet::clear()
         prevSolutionCost_ = opt_->infiniteCost();
 }
 
-void ompl::control::RLMPNet::freeMemory()
-{
-    if (nn_)
-    {
+void ompl::control::RLMPNet::freeMemory() {
+    if (nn_) {
         std::vector<Motion *> motions;
         nn_->list(motions);
-        for (auto &motion : motions)
-        {
+        for (auto &motion : motions) {
             if (motion->state_)
                 si_->freeState(motion->state_);
             if (motion->control_)
@@ -133,23 +121,19 @@ void ompl::control::RLMPNet::freeMemory()
             delete motion;
         }
     }
-    if (witnesses_)
-    {
+    if (witnesses_) {
         std::vector<Motion *> witnesses;
         witnesses_->list(witnesses);
-        for (auto &witness : witnesses)
-        {
+        for (auto &witness : witnesses) {
             delete witness;
         }
     }
-    for (auto &i : prevSolution_)
-    {
+    for (auto &i : prevSolution_) {
         if (i)
             si_->freeState(i);
     }
     prevSolution_.clear();
-    for (auto &prevSolutionControl : prevSolutionControls_)
-    {
+    for (auto &prevSolutionControl : prevSolutionControls_) {
         if (prevSolutionControl)
             siC_->freeControl(prevSolutionControl);
     }
@@ -157,25 +141,20 @@ void ompl::control::RLMPNet::freeMemory()
     prevSolutionSteps_.clear();
 }
 
-ompl::control::RLMPNet::Motion *ompl::control::RLMPNet::selectNode(ompl::control::RLMPNet::Motion *sample)
-{
+ompl::control::RLMPNet::Motion *ompl::control::RLMPNet::selectNode(ompl::control::RLMPNet::Motion *sample) {
     std::vector<Motion *> ret;
     Motion *selected = nullptr;
     base::Cost bestCost = opt_->infiniteCost();
     nn_->nearestR(sample, selectionRadius_, ret);
-    for (auto &i : ret)
-    {
-        if (!i->inactive_ && opt_->isCostBetterThan(i->accCost_, bestCost))
-        {
+    for (auto &i : ret) {
+        if (!i->inactive_ && opt_->isCostBetterThan(i->accCost_, bestCost)) {
             bestCost = i->accCost_;
             selected = i;
         }
     }
-    if (selected == nullptr)
-    {
+    if (selected == nullptr) {
         int k = 1;
-        while (selected == nullptr)
-        {
+        while (selected == nullptr) {
             nn_->nearestK(sample, k, ret);
             for (unsigned int i = 0; i < ret.size() && selected == nullptr; i++)
                 if (!ret[i]->inactive_)
@@ -186,22 +165,17 @@ ompl::control::RLMPNet::Motion *ompl::control::RLMPNet::selectNode(ompl::control
     return selected;
 }
 
-ompl::control::RLMPNet::Witness *ompl::control::RLMPNet::findClosestWitness(ompl::control::RLMPNet::Motion *node)
-{
-    if (witnesses_->size() > 0)
-    {
+ompl::control::RLMPNet::Witness *ompl::control::RLMPNet::findClosestWitness(ompl::control::RLMPNet::Motion *node) {
+    if (witnesses_->size() > 0) {
         auto *closest = static_cast<Witness *>(witnesses_->nearest(node));
-        if (distanceFunction(closest, node) > pruningRadius_)
-        {
+        if (distanceFunction(closest, node) > pruningRadius_) {
             closest = new Witness(siC_);
             closest->linkRep(node);
             si_->copyState(closest->state_, node->state_);
             witnesses_->add(closest);
         }
         return closest;
-    }
-    else
-    {
+    } else {
         auto *closest = new Witness(siC_);
         closest->linkRep(node);
         si_->copyState(closest->state_, node->state_);
@@ -210,16 +184,14 @@ ompl::control::RLMPNet::Witness *ompl::control::RLMPNet::findClosestWitness(ompl
     }
 }
 
-ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTerminationCondition &ptc)
-{
+ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTerminationCondition &ptc) {
     checkValidity();
     base::Goal *goal = pdef_->getGoal().get();
     auto *goal_s = dynamic_cast<base::GoalSampleableRegion *>(goal);
-    auto current_state = si_->allocState(); 
+    auto current_state = si_->allocState();
     auto goal_state = si_->allocState();
 
-    while (const base::State *st = pis_.nextStart())
-    {
+    while (const base::State *st = pis_.nextStart()) {
         auto *motion = new Motion(siC_);
         si_->copyState(motion->state_, st);
         si_->copyState(current_state, st);
@@ -230,8 +202,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
     }
     goal_s->sampleGoal(goal_state);
 
-    if (nn_->size() == 0)
-    {
+    if (nn_->size() == 0) {
         OMPL_ERROR("%s: There are no valid initial states!", getName().c_str());
         return base::PlannerStatus::INVALID_START;
     }
@@ -255,8 +226,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
 
     unsigned iterations = 0;
 
-    while (ptc == false)
-    {
+    while (ptc == false) {
         // /* sample random state (with goal biasing) */
         // if (goal_s && rng_.uniform01() < goalBias_ && goal_s->canSample())
         //     goal_s->sampleGoal(rstate);
@@ -273,14 +243,12 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
         unsigned int cd = rng_.uniformInt(siC_->getMinControlDuration(), siC_->getMaxControlDuration());
         unsigned int propCd = siC_->propagateWhileValid(nmotion->state_, rctrl, cd, rstate);
 
-        if (propCd == cd)
-        {
+        if (propCd == cd) {
             base::Cost incCost = opt_->motionCost(nmotion->state_, rstate);
             base::Cost cost = opt_->combineCosts(nmotion->accCost_, incCost);
             Witness *closestWitness = findClosestWitness(rmotion);
 
-            if (closestWitness->rep_ == rmotion || opt_->isCostBetterThan(cost, closestWitness->rep_->accCost_))
-            {
+            if (closestWitness->rep_ == rmotion || opt_->isCostBetterThan(cost, closestWitness->rep_->accCost_)) {
                 Motion *oldRep = closestWitness->rep_;
                 /* create a motion */
                 auto *motion = new Motion(siC_);
@@ -295,8 +263,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
                 nn_->add(motion);
                 double dist = 0.0;
                 bool solv = goal->isSatisfied(motion->state_, &dist);
-                if (solv && opt_->isCostBetterThan(motion->accCost_, prevSolutionCost_))
-                {
+                if (solv && opt_->isCostBetterThan(motion->accCost_, prevSolutionCost_)) {
                     approxdif = dist;
                     solution = motion;
 
@@ -311,8 +278,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
                     prevSolutionSteps_.clear();
 
                     Motion *solTrav = solution;
-                    while (solTrav->parent_ != nullptr)
-                    {
+                    while (solTrav->parent_ != nullptr) {
                         prevSolution_.push_back(si_->cloneState(solTrav->state_));
                         prevSolutionControls_.push_back(siC_->cloneControl(solTrav->control_));
                         prevSolutionSteps_.push_back(solTrav->steps_);
@@ -326,8 +292,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
                     if (sufficientlyShort)
                         break;
                 }
-                if (solution == nullptr && dist < approxdif)
-                {
+                if (solution == nullptr && dist < approxdif) {
                     approxdif = dist;
                     approxsol = motion;
 
@@ -342,8 +307,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
                     prevSolutionSteps_.clear();
 
                     Motion *solTrav = approxsol;
-                    while (solTrav->parent_ != nullptr)
-                    {
+                    while (solTrav->parent_ != nullptr) {
                         prevSolution_.push_back(si_->cloneState(solTrav->state_));
                         prevSolutionControls_.push_back(siC_->cloneControl(solTrav->control_));
                         prevSolutionSteps_.push_back(solTrav->steps_);
@@ -352,10 +316,8 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
                     prevSolution_.push_back(si_->cloneState(solTrav->state_));
                 }
 
-                if (oldRep != rmotion)
-                {
-                    while (oldRep->inactive_ && oldRep->numChildren_ == 0)
-                    {
+                if (oldRep != rmotion) {
+                    while (oldRep->inactive_ && oldRep->numChildren_ == 0) {
                         oldRep->inactive_ = true;
                         nn_->remove(oldRep);
 
@@ -379,14 +341,12 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
 
     bool solved = false;
     bool approximate = false;
-    if (solution == nullptr)
-    {
+    if (solution == nullptr) {
         solution = approxsol;
         approximate = true;
     }
 
-    if (solution != nullptr)
-    {
+    if (solution != nullptr) {
         /* set the solution path */
         auto path(std::make_shared<PathControl>(si_));
         for (int i = prevSolution_.size() - 1; i >= 1; --i)
@@ -409,8 +369,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
     return {solved, approximate};
 }
 
-void ompl::control::RLMPNet::getPlannerData(base::PlannerData &data) const
-{
+void ompl::control::RLMPNet::getPlannerData(base::PlannerData &data) const {
     Planner::getPlannerData(data);
 
     std::vector<Motion *> motions;
@@ -418,17 +377,13 @@ void ompl::control::RLMPNet::getPlannerData(base::PlannerData &data) const
     if (nn_)
         nn_->list(motions);
 
-    for (auto &motion : motions)
-    {
-        if (motion->numChildren_ == 0)
-        {
+    for (auto &motion : motions) {
+        if (motion->numChildren_ == 0) {
             allMotions.push_back(motion);
         }
     }
-    for (unsigned i = 0; i < allMotions.size(); i++)
-    {
-        if (allMotions[i]->parent_ != nullptr)
-        {
+    for (unsigned i = 0; i < allMotions.size(); i++) {
+        if (allMotions[i]->parent_ != nullptr) {
             allMotions.push_back(allMotions[i]->parent_);
         }
     }
@@ -438,17 +393,14 @@ void ompl::control::RLMPNet::getPlannerData(base::PlannerData &data) const
     if (prevSolution_.size() != 0)
         data.addGoalVertex(base::PlannerDataVertex(prevSolution_[0]));
 
-    for (auto m : allMotions)
-    {
-        if (m->parent_)
-        {
+    for (auto m : allMotions) {
+        if (m->parent_) {
             if (data.hasControls())
                 data.addEdge(base::PlannerDataVertex(m->parent_->state_), base::PlannerDataVertex(m->state_),
                              control::PlannerDataEdgeControl(m->control_, m->steps_ * delta));
             else
                 data.addEdge(base::PlannerDataVertex(m->parent_->state_), base::PlannerDataVertex(m->state_));
-        }
-        else
+        } else
             data.addStartVertex(base::PlannerDataVertex(m->state_));
     }
 }
