@@ -1,8 +1,7 @@
 # target 1: run planner with pure C++
 add_executable(IRLMPNet
         main.cpp
-        planner/src/RLMPNet.cpp
-        planner/src/RRTConnectMPNet.cpp test/test_MPNet.h)
+        planner/src/RLMPNet.cpp)
 target_include_directories(IRLMPNet PRIVATE
         ./)
 target_link_libraries(IRLMPNet PRIVATE
@@ -23,7 +22,10 @@ target_link_libraries(KinoDynSys PRIVATE
 
 # target 3: check the parts of this code individually
 add_executable(test
-        test.cpp test/src/test_car.cpp test/src/test_MPNet.cpp)
+        test.cpp
+        test/src/test_car1order.cpp
+        planner/src/RRTConnectMPNet.cpp
+        planner/src/RRTMPNet.cpp)
 target_include_directories(test PRIVATE
         ./)
 target_link_libraries(test PRIVATE

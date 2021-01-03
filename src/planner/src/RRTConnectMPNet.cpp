@@ -40,7 +40,7 @@
 #include <ompl/util/String.h>
 
 ompl::geometric::RRTConnectMPNet::RRTConnectMPNet(const base::SpaceInformationPtr &si, bool addIntermediateStates)
-        : base::Planner(si, addIntermediateStates ? "RRTConnectIntermediate" : "RRTConnectMPNet") {
+    : base::Planner(si, addIntermediateStates ? "RRTConnectIntermediate" : "RRTConnectMPNet") {
     specs_.recognizedGoal = base::GOAL_SAMPLEABLE_REGION;
     specs_.directed = true;
 
@@ -130,8 +130,7 @@ ompl::geometric::RRTConnectMPNet::GrowState ompl::geometric::RRTConnectMPNet::gr
         reach = false;
     }
 
-    bool validMotion = tgi.start ? si_->checkMotion(nmotion->state, dstate) :
-                       si_->isValid(dstate) && si_->checkMotion(dstate, nmotion->state);
+    bool validMotion = tgi.start ? si_->checkMotion(nmotion->state, dstate) : si_->isValid(dstate) && si_->checkMotion(dstate, nmotion->state);
 
     if (!validMotion)
         return TRAPPED;
@@ -174,6 +173,7 @@ ompl::base::PlannerStatus ompl::geometric::RRTConnectMPNet::solve(const base::Pl
     checkValidity();
     auto *goal = dynamic_cast<base::GoalSampleableRegion *>(pdef_->getGoal().get());
     base::State *stateA, *stateB;
+    all_samples_.resize(0);
 
     if (goal == nullptr) {
         OMPL_ERROR("%s: Unknown type of goal", getName().c_str());
@@ -202,7 +202,7 @@ ompl::base::PlannerStatus ompl::geometric::RRTConnectMPNet::solve(const base::Pl
         sampler_ = si_->allocStateSampler();
 
     OMPL_INFORM("%s: Starting planning with %d states already in datastructure", getName().c_str(),
-                (int) (tStart_->size() + tGoal_->size()));
+                (int)(tStart_->size() + tGoal_->size()));
 
     TreeGrowingInfo tgi;
     tgi.xstate = si_->allocState();
@@ -242,13 +242,20 @@ ompl::base::PlannerStatus ompl::geometric::RRTConnectMPNet::solve(const base::Pl
         } else {
             mpnet_sampler_->sampleMPNet(stateB, stateA, rstate);
         }
+        {
+            std::vector<double> state_vec;
+            si_->getStateSpace()->copyToReals(state_vec, rstate);
+            all_samples_.emplace_back(state_vec);
+        }
 
         GrowState gs = growTree(tree, tgi, rmotion);
 
-        if (!startTree) {
-            stateA = tgi.xstate;
-        } else {
-            stateB = tgi.xstate;
+        if (gs != TRAPPED) {
+            if (!startTree) {
+                stateA = tgi.xmotion->state;
+            } else {
+                stateB = tgi.xmotion->state;
+            }
         }
 
         if (gs != TRAPPED) {
@@ -263,13 +270,15 @@ ompl::base::PlannerStatus ompl::geometric::RRTConnectMPNet::solve(const base::Pl
 
             GrowState gsc = ADVANCED;
             tgi.start = startTree;
-            while (gsc == ADVANCED)
+            while (gsc == ADVANCED) {
                 gsc = growTree(otherTree, tgi, rmotion);
-
-            if (startTree) {
-                stateA = tgi.xstate;
-            } else {
-                stateB = tgi.xstate;
+                if (gsc != TRAPPED) {
+                    if (startTree) {
+                        stateA = tgi.xmotion->state;
+                    } else {
+                        stateB = tgi.xmotion->state;
+                    }
+                }
             }
 
             /* update distance between trees */
@@ -393,4 +402,16 @@ void ompl::geometric::RRTConnectMPNet::getPlannerData(base::PlannerData &data) c
 
     // Add some info.
     data.properties["approx goal distance REAL"] = ompl::toString(distanceBetweenTrees_);
+}
+
+void ompl::geometric::RRTConnectMPNet::printAllSamples(std::ostream &o) const {
+    for (const auto &sample : all_samples_) {
+        for (unsigned int i=0; i<sample.size(); i++) {
+            o << sample[i];
+            if (i < sample.size()-1) {
+                o << ",";
+            }
+        }
+        o << std::endl;
+    }
 }
