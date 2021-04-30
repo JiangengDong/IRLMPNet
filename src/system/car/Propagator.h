@@ -23,11 +23,11 @@ namespace IRLMPNet {
             using Ptr = std::shared_ptr<Car1OrderPropagator>;
 
             ob::StateSpacePtr space_;
-            double time_step_;
+            double integrate_stepsize_;
 
             explicit Car1OrderPropagator(const oc::SpaceInformationPtr &si) : oc::StatePropagator(si) {
                 space_ = si_->getStateSpace();
-                time_step_ = 0.02;
+                integrate_stepsize_ = 0.002;
             }
 
             void propagate(const ob::State *state, const oc::Control *control, double duration, ob::State *result) const override {
@@ -37,10 +37,10 @@ namespace IRLMPNet {
                 auto pcontrol = control->as<Car1OrderControlSpace::ControlType>()->values;
                 auto presult = result->as<Car1OrderStateSpace::StateType>()->values;
 
-                while (duration > 2 * time_step_) {
-                    RK4(presult, 3, pcontrol, time_step_, &ode, presult);
+                while (duration > 2 * integrate_stepsize_) {
+                    RK4(presult, 3, pcontrol, integrate_stepsize_, &ode, presult);
                     space_->enforceBounds(result);
-                    duration -= time_step_;
+                    duration -= integrate_stepsize_;
                 }
                 RK4(presult, 3, pcontrol, duration, &ode, presult);
                 space_->enforceBounds(result);

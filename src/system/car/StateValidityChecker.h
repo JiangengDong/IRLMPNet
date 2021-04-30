@@ -7,8 +7,8 @@
 
 #include <boost/format.hpp>
 #include <fstream>
-#include <string>
 #include <ompl/base/StateValidityChecker.h>
+#include <string>
 
 #include "system/car/StateSpace.h"
 
@@ -35,37 +35,23 @@ namespace IRLMPNet {
                 _obs_half_width = obs_width_ / 2.0;
                 _car_radius = sqrt(_car_half_x * _car_half_x + _car_half_y * _car_half_y);
 
-                // read obstacle centers. The CSV is a 5*2 matrix.
-                // TODO: convert to constant that shipped with the compiled executable/library
-                std::string obs_file = boost::str(boost::format("data/obstacle/car/obs_%1%.csv") % obs_index);
-                std::ifstream input_csv(obs_file);
+                obs_centers_ = loadObstacle(obs_index);
 
-                obs_centers_.resize(0);
                 _obs_AABBs.resize(0);
                 _obs_expanded_AABBs.resize(0);
-                for (size_t i = 0; i < 5; i++) {
-                    double center_x, center_y;
-                    std::string value_str;
-
-                    getline(input_csv, value_str, ',');
-                    center_x = std::stod(value_str);
-                    getline(input_csv, value_str);
-                    center_y = std::stod(value_str);
-
-                    obs_centers_.emplace_back(std::array<double, 2>{center_x, center_y});
+                for (const auto &obs_center : obs_centers_) {
+                    double center_x = obs_center[0], center_y = obs_center[1];
                     _obs_AABBs.emplace_back(std::array<double, 4>{
-                            center_x - _obs_half_width,
-                            center_y - _obs_half_width,
-                            center_x + _obs_half_width,
-                            center_y + _obs_half_width});
+                        center_x - _obs_half_width,
+                        center_y - _obs_half_width,
+                        center_x + _obs_half_width,
+                        center_y + _obs_half_width});
                     _obs_expanded_AABBs.emplace_back(std::array<double, 4>{
-                            center_x - _obs_half_width - _car_radius,
-                            center_y - _obs_half_width - _car_radius,
-                            center_x + _obs_half_width + _car_radius,
-                            center_y + _obs_half_width + _car_radius});
+                        center_x - _obs_half_width - _car_radius,
+                        center_y - _obs_half_width - _car_radius,
+                        center_x + _obs_half_width + _car_radius,
+                        center_y + _obs_half_width + _car_radius});
                 }
-
-                input_csv.close();
             }
 
             bool isValid(const ob::State *state) const override {
@@ -97,7 +83,7 @@ namespace IRLMPNet {
 
                     // check: one edge of AABB is a separate line
                     const double car_x_halfspan = abs_c_theta * _car_half_x + abs_s_theta * _car_half_y,
-                            car_y_halfspan = abs_s_theta * _car_half_x + abs_c_theta * _car_half_y;
+                                 car_y_halfspan = abs_s_theta * _car_half_x + abs_c_theta * _car_half_y;
                     if (car_x - car_x_halfspan > obs_AABB[2] or
                         car_x + car_x_halfspan < obs_AABB[0] or
                         car_y - car_y_halfspan > obs_AABB[3] or
@@ -108,10 +94,10 @@ namespace IRLMPNet {
                     // check: one edge of car is a separate line.
                     // method: rotate both car and obstacle by -theta, so that the car is aligned to the xy axis.
                     const double car_x_rotate = c_theta * car_x + s_theta * car_y,
-                            car_y_rotate = -s_theta * car_x + c_theta * car_y;
+                                 car_y_rotate = -s_theta * car_x + c_theta * car_y;
                     const auto &obs_center = obs_centers_[i];
                     const double obs_center_x_rotate = c_theta * obs_center[0] + s_theta * obs_center[1],
-                            obs_center_y_rotate = -s_theta * obs_center[0] + c_theta * obs_center[1];
+                                 obs_center_y_rotate = -s_theta * obs_center[0] + c_theta * obs_center[1];
                     const double obs_halfspan = _obs_half_width * (abs_c_theta + abs_s_theta);
                     if (obs_center_x_rotate - obs_halfspan > car_x_rotate + _car_half_x or
                         obs_center_x_rotate + obs_halfspan < car_x_rotate - _car_half_x or
@@ -126,6 +112,10 @@ namespace IRLMPNet {
                 return true;
             }
 
+            const std::vector<std::array<double, 4>>& getObstacleAABBs() const {
+                return _obs_AABBs;
+            }
+
         private:
             std::vector<std::array<double, 4>> _obs_AABBs;
             std::vector<std::array<double, 4>> _obs_expanded_AABBs;
@@ -133,8 +123,10 @@ namespace IRLMPNet {
             double _car_half_y;
             double _car_radius;
             double _obs_half_width;
+
+            static std::vector<std::array<double, 2>> loadObstacle(unsigned int n);
         };
-    }
+    } // namespace System
 } // namespace IRLMPNet
 
 #endif //IRLMPNET_SYSTEM_CAR_STATEVALIDITYCHECKER_H

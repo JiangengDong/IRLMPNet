@@ -5,6 +5,7 @@
 #include "planner/RRTConnectMPNet.h"
 #include "planner/RRTMPNet.h"
 #include "planner/torch_interface/MPNetSampler.h"
+#include "planner/torch_interface/Policy.h"
 #include "system/car/System.h"
 #include <fstream>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
@@ -211,16 +212,40 @@ void test_car1order_MPNet_integrate(
     }
 }
 
-void test_car1order() {
-    //    // result: pass
-    //    test_car1order_collision_checker();
+void test_car1order_policy() {
+    auto system = IRLMPNet::System::Car1OrderSystem();
+    auto policy = IRLMPNet::Policy(system.space_information, "data/pytorch_model/rl/car_free-TD3-unnorm-script.pt");
 
-    //    // result: pass
-    //    test_car1order_propagator();
+    ompl::base::State *start = system.space_information->allocState(),
+                      *goal = system.space_information->allocState(),
+                      *next = system.space_information->allocState();
+    ompl::control::Control *control = system.space_information->allocControl();
+
+    system.state_space->copyFromReals(start, {-15, -10, 0});
+    system.state_space->copyFromReals(goal, {0, 0, 0});
+
+    std::ofstream output_csv("./data/test/car1order_policy_traj.csv");
+    for (unsigned int i = 0; i < 300; i++) {
+        policy.act(start, goal, control);
+        system.space_information->propagate(start, control, 1, next);
+        system.space_information->copyState(start, next);
+        print_state(system.state_space, next, output_csv);
+    }
+}
+
+void test_car1order() {
+    // result: pass
+    test_car1order_collision_checker();
+
+    // // result: pass
+    // test_car1order_propagator();
 
     // // result: pass
     // test_car1order_MPNet_unit();
 
     // // result: pass
     // test_car1order_MPNet_integrate({-20, -2, 0}, {-5, 30, 0}, RRTMPNet, 10.0);
+
+    // // result: pass
+    // test_car1order_policy();
 }

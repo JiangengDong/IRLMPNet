@@ -34,8 +34,8 @@
 
 /* Authors: Zakary Littlefield */
 
-#ifndef IRLMPNET_PLANNER_RLMPNET_H_
-#define IRLMPNET_PLANNER_RLMPNET_H_
+#ifndef IRLMPNET_PLANNER_RLMPNETTREE_H_
+#define IRLMPNET_PLANNER_RLMPNETTREE_H_
 
 #include <ompl/control/planners/PlannerIncludes.h>
 #include <ompl/datastructures/NearestNeighbors.h>
@@ -47,13 +47,13 @@ namespace ompl
 {
     namespace control
     {
-        class RLMPNet : public base::Planner
+        class RLMPNetTree : public base::Planner
         {
         public:
             /** \brief Constructor */
-            explicit RLMPNet(const SpaceInformationPtr &si, IRLMPNet::Policy::Ptr policy, IRLMPNet::MPNetSampler::Ptr mpnet_sampler);
+            explicit RLMPNetTree(const SpaceInformationPtr &si, IRLMPNet::Policy::Ptr policy, IRLMPNet::MPNetSampler::Ptr mpnet_sampler, unsigned int batch_size);
 
-            ~RLMPNet() override;
+            ~RLMPNetTree() override;
 
             void setup() override;
 
@@ -269,6 +269,8 @@ namespace ompl
             IRLMPNet::Policy::Ptr policy_;
 
             IRLMPNet::MPNetSampler::Ptr mpnet_sampler_;
+
+            unsigned int batch_size_;
         };
     }
 }

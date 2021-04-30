@@ -9,3 +9,5 @@ click
 gym
 imageio
 h5py
+pandas
+seaborn

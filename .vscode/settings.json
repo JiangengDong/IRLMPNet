@@ -72,10 +72,12 @@
         "condition_variable": "cpp",
         "filesystem": "cpp",
         "mutex": "cpp",
-        "__nullptr": "cpp"
+        "__nullptr": "cpp",
+        "regex": "cpp",
+        "locale": "cpp"
     },
     "cmake.ctest.parallelJobs": 2,
-    "cmake.parallelJobs": 2, 
+    "cmake.parallelJobs": 2,
     "cmake.configureEnvironment": {
         "CMAKE_PREFIX_PATH": "/home/jiangeng/Workspace/pytorch_src/torch/share/cmake"
     },
@@ -84,10 +86,15 @@
         "**/.git/objects/**": true,
         "**/.git/subtree-cache/**": true,
         "**/node_modules/**": true,
-        "**/.hg/store/**": true, 
-        "./data/training_path/**": true
+        "**/.hg/store/**": true,
+        "./data/**": true,
+        "./extern/**": true,
+        "**/build/**": true,
+        "**/deprecated/**": true
     },
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "python.pythonPath": "/usr/bin/python3",
-    "terminal.integrated.scrollback": 10000
+    "terminal.integrated.scrollback": 10000,
+    "editor.detectIndentation": false,
+    "explorer.autoReveal": "focusNoScroll"
 }

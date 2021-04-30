@@ -20,7 +20,7 @@ namespace IRLMPNet {
             explicit Car1OrderControlSpace(const ob::StateSpacePtr &space) : oc::RealVectorControlSpace(space, 2) {
                 auto bounds = ob::RealVectorBounds(2);
                 bounds.low = {-1, -1};
-                bounds.high = {1, 1};
+                bounds.high = {2, 1};
                 setBounds(bounds);
             }
         };

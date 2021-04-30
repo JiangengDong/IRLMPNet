@@ -3,6 +3,7 @@ data/
 deprecated/
 cmake-build-debug/
 cmake-build-release/
+.trash/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
