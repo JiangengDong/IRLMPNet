@@ -1,13 +1,16 @@
 add_library(System
-        system/car/src/System.cpp
-        system/car/src/StateValidityChecker.cpp
-    )
+    system/car/src/System.cpp
+    system/car/src/StateValidityChecker.cpp
+)
 target_include_directories(System PUBLIC
     ./)
 target_link_libraries(System PUBLIC
     Eigen3::Eigen
     Boost::boost
-    ompl_interface)
+    ompl_interface
+)
+set_target_properties(System PROPERTIES
+    POSITION_INDEPENDENT_CODE TRUE)
 
 # target: run planner with pure C++
 add_executable(IRLMPNet
@@ -31,9 +34,10 @@ pybind11_add_module(KinoDynSys
 target_include_directories(KinoDynSys PRIVATE
     ./)
 target_link_libraries(KinoDynSys PRIVATE
-    Eigen3::Eigen
-    ompl_interface
     System)
+set_target_properties(KinoDynSys PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/python/envs/")
+
 
 # check the parts of this code individually
 add_executable(test

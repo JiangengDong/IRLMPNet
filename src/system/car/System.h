@@ -185,7 +185,7 @@ namespace IRLMPNet {
                 auto control = control_space->allocControl();
                 control_space->allocControlSampler()->sample(control);
                 auto pcontrol = control->as<ControlSpace::ControlType>()->values;
-                for (unsigned int i = 0; i < getStateDim_py(); i++) {
+                for (unsigned int i = 0; i < getControlDim_py(); i++) {
                     control_eig[i] = pcontrol[i];
                 }
                 control_space->freeControl(control);

@@ -10,126 +10,92 @@ Notations:
 * z: done
 """
 import argparse
-from math import inf
-import os
 import logging
+import os
+from math import inf
 
+import cv2
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvas
+from matplotlib.collections import PatchCollection
+from matplotlib.figure import Figure
+from matplotlib.patches import Arrow, Rectangle
+from matplotlib.transforms import Affine2D
 from torch import nn, optim
 from torch.distributions import Normal
 from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
-from torchvision.utils import make_grid, save_image
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
-import cv2
-from matplotlib import pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvas
-from matplotlib.patches import Rectangle, Arrow
-from matplotlib.collections import PatchCollection
-from matplotlib.transforms import Affine2D
 
 from envs import Car1OrderEnv
 from memory import ExperienceReplay
-from models import bottle, ObservationModel, RewardModel, TransitionModel, ObservationEncoder
+from models import (ObservationEncoder, ObservationModel, RewardModel,
+                    TransitionModel, bottle)
 from planner import MPCPlanner
 
 
 def get_args():
     # Hyperparameters
     parser = argparse.ArgumentParser(description='PlaNet')
-    parser.add_argument('--id', type=str, default='default',
-                        help='Experiment ID')
-    parser.add_argument('--seed', type=int, default=1,
-                        metavar='S', help='Random seed')
-    parser.add_argument(
-        '--disable-cuda', action='store_true', help='Disable CUDA')
+    parser.add_argument('--id', type=str, default='default', help='Experiment ID')
+    parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random seed')
+    parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
 
     # environment configs
-    parser.add_argument('--max-episode-length', type=int,
-                        default=1000, metavar='T', help='Max episode length')
-    parser.add_argument('--action-repeat', type=int,
-                        default=2, metavar='R', help='Action repeat')
-    parser.add_argument('--render', action='store_true',
-                        help='Render environment')
+    parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
+    parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+    parser.add_argument('--render', action='store_true', help='Render environment')
 
     # replay buffer configs
-    parser.add_argument('--experience-size', type=int,
-                        default=1000000, metavar='D', help='Experience replay size')
+    parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')
 
     # network configs
-    parser.add_argument('--activation-function', type=str, default='relu',
-                        choices=dir(F), help='Model activation function')
-    parser.add_argument('--embedding-size', type=int, default=1024,
-                        metavar='E', help='Observation embedding size')
-    parser.add_argument('--hidden-size', type=int,
-                        default=200, metavar='H', help='Hidden size')
-    parser.add_argument('--belief-size', type=int, default=200,
-                        metavar='H', help='Belief/hidden size')
-    parser.add_argument('--state-size', type=int, default=30,
-                        metavar='Z', help='State/latent size')
+    parser.add_argument('--activation-function', type=str, default='relu', choices=dir(F), help='Model activation function')
+    parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', help='Observation embedding size')
+    parser.add_argument('--hidden-size', type=int, default=200, metavar='H', help='Hidden size')
+    parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
+    parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
 
     # MPC planner configs
-    parser.add_argument('--action-noise', type=float,
-                        default=0.3, metavar='ε', help='Action noise')
-    parser.add_argument('--planning-horizon', type=int, default=12,
-                        metavar='H', help='Planning horizon distance')
-    parser.add_argument('--optimisation-iters', type=int, default=10,
-                        metavar='I', help='Planning optimisation iterations')
-    parser.add_argument('--candidates', type=int, default=1000,
-                        metavar='J', help='Candidate samples per iteration')
-    parser.add_argument('--top-candidates', type=int, default=100,
-                        metavar='K', help='Number of top candidates to fit')
+    parser.add_argument('--action-noise', type=float, default=0.3, metavar='ε', help='Action noise')
+    parser.add_argument('--planning-horizon', type=int, default=12, metavar='H', help='Planning horizon distance')
+    parser.add_argument('--optimisation-iters', type=int, default=10, metavar='I', help='Planning optimisation iterations')
+    parser.add_argument('--candidates', type=int, default=1000, metavar='J', help='Candidate samples per iteration')
+    parser.add_argument('--top-candidates', type=int, default=100, metavar='K', help='Number of top candidates to fit')
 
     # hyperparameters
-    parser.add_argument('--episodes', type=int, default=200,
-                        metavar='E', help='Total number of episodes')
-    parser.add_argument('--seed-episodes', type=int,
-                        default=5, metavar='S', help='Seed episodes')
-    parser.add_argument('--collect-interval', type=int,
-                        default=100, metavar='C', help='Collect interval')
-    parser.add_argument('--batch-size', type=int, default=50,
-                        metavar='B', help='Batch size')
-    parser.add_argument('--chunk-size', type=int, default=50,
-                        metavar='L', help='Chunk size')
-    parser.add_argument('--overshooting-distance', type=int, default=50, metavar='D',
-                        help='Latent overshooting distance/latent overshooting weight for t = 1')
-    parser.add_argument('--overshooting-kl-beta', type=float, default=0, metavar='β>1',
-                        help='Latent overshooting KL weight for t > 1 (0 to disable)')
+    parser.add_argument('--episodes', type=int, default=200, metavar='E', help='Total number of episodes')
+    parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
+    parser.add_argument('--collect-interval', type=int, default=100, metavar='C', help='Collect interval')
+    parser.add_argument('--batch-size', type=int, default=50, metavar='B', help='Batch size')
+    parser.add_argument('--chunk-size', type=int, default=50, metavar='L', help='Chunk size')
+    parser.add_argument('--overshooting-distance', type=int, default=50, metavar='D', help='Latent overshooting distance/latent overshooting weight for t = 1')
+    parser.add_argument('--overshooting-kl-beta', type=float, default=0, metavar='β>1', help='Latent overshooting KL weight for t > 1 (0 to disable)')
     parser.add_argument('--overshooting-reward-scale', type=float, default=0, metavar='R>1',
                         help='Latent overshooting reward prediction weight for t > 1 (0 to disable)')
-    parser.add_argument('--global-kl-beta', type=float, default=0,
-                        metavar='βg', help='Global KL weight (0 to disable)')
-    parser.add_argument('--free-nats', type=float,
-                        default=3, metavar='F', help='Free nats')
-    parser.add_argument('--learning-rate', type=float,
-                        default=1e-3, metavar='α', help='Learning rate')
+    parser.add_argument('--global-kl-beta', type=float, default=0, metavar='βg', help='Global KL weight (0 to disable)')
+    parser.add_argument('--free-nats', type=float, default=3, metavar='F', help='Free nats')
+    parser.add_argument('--learning-rate', type=float, default=1e-3, metavar='α', help='Learning rate')
     parser.add_argument('--learning-rate-schedule', type=int, default=0, metavar='αS',
                         help='Linear learning rate schedule (optimisation steps from 0 to final learning rate; 0 to disable)')
-    parser.add_argument('--adam-epsilon', type=float, default=1e-4,
-                        metavar='ε', help='Adam optimiser epsilon value')
-    parser.add_argument('--grad-clip-norm', type=float,
-                        default=1000, metavar='C', help='Gradient clipping norm')
+    parser.add_argument('--adam-epsilon', type=float, default=1e-4, metavar='ε', help='Adam optimiser epsilon value')
+    parser.add_argument('--grad-clip-norm', type=float, default=1000, metavar='C', help='Gradient clipping norm')
 
     # test configs
     parser.add_argument('--test', action='store_true', help='Test only')
-    parser.add_argument('--test-interval', type=int, default=25,
-                        metavar='I', help='Test interval (episodes)')
-    parser.add_argument('--test-episodes', type=int, default=10,
-                        metavar='E', help='Number of test episodes')
+    parser.add_argument('--test-interval', type=int, default=25,  metavar='I', help='Test interval (episodes)')
+    parser.add_argument('--test-episodes', type=int, default=10, metavar='E', help='Number of test episodes')
 
     # checkpoint configs
-    parser.add_argument('--checkpoint-interval', type=int, default=50,
-                        metavar='I', help='Checkpoint interval (episodes)')
-    parser.add_argument('--checkpoint-experience',
-                        action='store_true', help='Checkpoint experience replay')
+    parser.add_argument('--checkpoint-interval', type=int, default=50, metavar='I', help='Checkpoint interval (episodes)')
+    parser.add_argument('--checkpoint-experience', action='store_true', help='Checkpoint experience replay')
 
     # continue training
-    parser.add_argument('--models', type=str, default='',
-                        metavar='M', help='Load model checkpoint')
-    parser.add_argument('--experience-replay', type=str,
-                        default='', metavar='ER', help='Load experience replay')
+    parser.add_argument('--models', type=str, default='', metavar='M', help='Load model checkpoint')
+    parser.add_argument('--experience-replay', type=str, default='', metavar='ER', help='Load experience replay')
 
     args = parser.parse_args()
 
@@ -139,7 +105,7 @@ def get_args():
 
     args.experience_size = 10000
 
-    args.embedding_size = 256
+    args.embedding_size = 1024
     args.hidden_size = 256
     args.belief_size = 256
     args.state_size = 32
@@ -165,9 +131,9 @@ def postprocess_args(args):
     else:
         args.device = torch.device('cpu')
 
-    print(' ' * 26 + 'Options')
+    print(' ' * 16 + 'Options')
     for k, v in vars(args).items():
-        print(' ' * 26 + k + ': ' + str(v))
+        print(' ' * 16 + k + ': ' + str(v))
 
     return args
 
@@ -197,7 +163,7 @@ def setup_env(args):
 def setup_replay(args, env):
     if args.test:
         D = None
-    elif args.experience_replay is not '':
+    elif args.experience_replay != '':
         if os.path.exists(args.experience_replay):
             D = torch.load(args.experience_replay)
         else:
@@ -263,7 +229,7 @@ def setup_models(args, env):
         eps=args.adam_epsilon)
 
     # load parameters
-    if args.models is not '':
+    if args.models != '':
         if os.path.exists(args.models):
             model_dicts = torch.load(args.models)
             transition_model.load_state_dict(model_dicts['transition_model'])
@@ -298,8 +264,11 @@ def setup(args):
 
     results_dir = setup_workdir(args)
     env = setup_env(args)
+
     D = setup_replay(args, env)
+
     models, optimiser, param_list = setup_models(args, env)
+
     planner = setup_planner(args, env, models[0], models[2])
 
     return results_dir, env, D, models, optimiser, param_list, planner
@@ -367,11 +336,9 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
 def visualize_local_map(filename, observations):
     observations = observations[:, :3*64*64] + 0.5
     observations = observations.view(-1, 3, 64, 64)
-    observations = torch.movedim(
-        observations, 1, 3).cpu().numpy().astype(np.uint8)*255
+    observations = torch.movedim(observations, 1, 3).cpu().numpy().astype(np.uint8)*255
     _, H, W, _ = observations.shape
-    writer = cv2.VideoWriter(
-        filename, cv2.VideoWriter_fourcc(*'mp4v'), 30., (W, H), True)
+    writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), 30., (W, H), True)
     for observation in observations:
         writer.write(observation)
     writer.release()
@@ -461,15 +428,11 @@ def test(args, results_dir, env, models, planner):
         observations = torch.cat(experience["observation"], dim=0)
         beliefs = torch.cat(experience["belief"], dim=0)
         states = torch.cat(experience["state"], dim=0)
-        predictions = observation_model.forward(
-            beliefs.to(args.device), states.to(args.device))
+        predictions = observation_model.forward(beliefs.to(args.device), states.to(args.device))
         # visualize them
-        visualize_local_map(os.path.join(
-            results_dir, "observation.mp4"), observations)
-        visualize_local_map(os.path.join(
-            results_dir, "prediction.mp4"), predictions)
-        visualize_global_map(os.path.join(
-            results_dir, "global.mp4"), observations, predictions)
+        visualize_local_map(os.path.join(results_dir, "observation.mp4"), observations)
+        visualize_local_map(os.path.join(results_dir, "prediction.mp4"), predictions)
+        visualize_global_map(os.path.join(results_dir, "global.mp4"), observations, predictions)
 
     for model in models:
         model.train()
@@ -484,6 +447,7 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
     # Allowed deviation in KL divergence
     free_nats = torch.full((1, ), args.free_nats,
                            dtype=torch.float32, device=args.device)
+    summary_writter = SummaryWriter(os.path.join(results_dir, "tensorboard"))
 
     # unpack models
     transition_model, observation_model, reward_model, encoder = models
@@ -526,12 +490,12 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                 observations[1:, 3*64*64:],
                 reduction='none'
             ).mean(dim=2).mean(dim=(0, 1))
-            observation_loss = 2000 * visual_loss + 2000 * symbol_loss
+            observation_loss = visual_loss + symbol_loss
 
             # reward loss
             reward_loss = F.mse_loss(
-                bottle(reward_model, (beliefs.detach(),
-                                      posterior_states.detach())),
+                bottle(reward_model, (beliefs,
+                                      posterior_states)),
                 rewards[:-1],
                 reduction='none'
             ).mean(dim=(0, 1))
@@ -577,13 +541,11 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                         (F.pad(actions[t:d], seq_pad),
                          F.pad(nonterminals[t:d], seq_pad),
                          F.pad(rewards[t:d], seq_pad[2:]),
-                         beliefs[t_], prior_states[t_],
-                         F.pad(
-                             posterior_means[t_ + 1:d_ + 1].detach(), seq_pad),
-                         F.pad(
-                             posterior_std_devs[t_ + 1:d_ + 1].detach(), seq_pad, value=1),
-                         F.pad(torch.ones(d - t, args.batch_size,
-                                          args.state_size, device=args.device), seq_pad)
+                         beliefs[t_],
+                         prior_states[t_],
+                         F.pad(posterior_means[t_ + 1:d_ + 1].detach(), seq_pad),
+                         F.pad(posterior_std_devs[t_ + 1:d_ + 1].detach(), seq_pad, value=1),
+                         F.pad(torch.ones(d - t, args.batch_size, args.state_size, device=args.device), seq_pad)
                          )
                     )  # Posterior standard deviations must be padded with > 0 to prevent infinite KL divergences
 
@@ -627,6 +589,11 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
             nn.utils.clip_grad_norm_(
                 param_list, args.grad_clip_norm, norm_type=2)
             optimiser.step()
+            # add tensorboard log
+            global_step = idx_train + idx_episode * args.collect_interval
+            summary_writter.add_scalar("observation_loss", observation_loss, global_step)
+            summary_writter.add_scalar("reward_loss", reward_loss, global_step)
+            summary_writter.add_scalar("kl_loss", kl_loss, global_step)
 
         for idx_collect in trange(1, leave=False, desc="Collecting"):
             experience = collect_experience(
@@ -640,6 +607,7 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
 
         # Checkpoint models
         if (idx_episode+1) % args.checkpoint_interval == 0:
+            os.makedirs(os.path.join(results_dir, "pytorch_model"), exist_ok=True)
             torch.save(
                 {
                     'transition_model': transition_model.state_dict(),
@@ -648,10 +616,12 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                     'encoder': encoder.state_dict(),
                     'optimiser': optimiser.state_dict()
                 },
-                os.path.join(results_dir, 'models_%d.pth' % idx_episode))
+                os.path.join(results_dir, "pytorch_model", 'models_%d.pth' % idx_episode))
             if args.checkpoint_experience:
                 # Warning: will fail with MemoryError with large memory sizes
-                torch.save(D, os.path.join(results_dir, 'experience.pth'))
+                torch.save(D, os.path.join(results_dir, "pytorch_model", 'experience.pth'))
+
+    summary_writter.close()
 
 
 def main():
@@ -660,8 +630,7 @@ def main():
     if args.test:
         test(args, results_dir, env, models, planner)
     else:
-        train(args, results_dir, env, D, models,
-              optimiser, param_list, planner)
+        train(args, results_dir, env, D, models, optimiser, param_list, planner)
 
 
 if __name__ == "__main__":

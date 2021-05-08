@@ -132,27 +132,6 @@ class ObservationModel(jit.ScriptModule):
         return torch.cat([visual.view(-1, 3*64*64), symbol], dim=1)
 
 
-class RewardModel(jit.ScriptModule):
-    def __init__(self, belief_size, state_size, hidden_size):
-        super().__init__()
-        self.belief_size = belief_size
-        self.state_size = state_size
-        self.hidden_size = hidden_size
-
-        self.network = nn.Sequential(
-            nn.Linear(belief_size + state_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, 1)
-        )
-
-    @jit.script_method
-    def forward(self, belief, state):
-        reward = self.network(torch.cat([belief, state], dim=1)).squeeze()
-        return reward
-
-
 class ObservationEncoder(jit.ScriptModule):
     def __init__(self, embedding_size):
         super().__init__()
@@ -186,3 +165,24 @@ class ObservationEncoder(jit.ScriptModule):
         hidden2 = self.symbol_encoder(symbol)
 
         return torch.cat([hidden1, hidden2], dim=1)
+
+
+class RewardModel(jit.ScriptModule):
+    def __init__(self, belief_size, state_size, hidden_size):
+        super().__init__()
+        self.belief_size = belief_size
+        self.state_size = state_size
+        self.hidden_size = hidden_size
+
+        self.network = nn.Sequential(
+            nn.Linear(belief_size + state_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1)
+        )
+
+    @jit.script_method
+    def forward(self, belief, state):
+        reward = self.network(torch.cat([belief, state], dim=1)).squeeze()
+        return reward

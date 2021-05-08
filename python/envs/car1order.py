@@ -68,13 +68,13 @@ class Car1OrderEnv:
 
         return self.get_ob()
 
-    def step(self, action: np.ndarray): # TODO: change to tensor
+    def step(self, action: np.ndarray):  # TODO: change to tensor
         # input action is assumed to be (2, ) ndarray and normalized
         assert action.shape == (self.control_dim, )
         # unnormalize the action
         action = action*self.control_range + self.control_center
 
-        reward = 0.0
+        reward_dist = 0.0
         for _ in range(self.action_repeat):
             # should not step after done
             if self.done:
@@ -93,11 +93,11 @@ class Car1OrderEnv:
             self.normalized_state = (self.state - self.state_center)/self.state_range
             diff = self.system.diff(self.normalized_state, self.normalized_goal)
             dist = np.linalg.norm(diff*np.array([1.0, 1.0, 0.1]))
-            reward += - dist + 0.5 + (-2 if is_collided else 0)
+            reward_dist += - dist + 0.5
             if self.step_count == self.max_episode_length or dist < 0.01 or is_collided:
                 self.done = True
 
-        return self.get_ob(), reward, self.done
+        return self.get_ob(), (reward_dist + (-1 if is_collided else 0)), self.done
 
     def render(self, mode="rgb_array"):
         raise NotImplementedError

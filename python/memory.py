@@ -8,7 +8,8 @@ class ExperienceReplay():
         self.size = size
         self.observations = np.empty((size, observation_size), dtype=np.float32)
         self.actions = np.empty((size, action_size), dtype=np.float32)
-        self.rewards = np.empty((size, ), dtype=np.float32)
+        self.rewards_dist = np.empty((size, ), dtype=np.float32)
+        # self.rewards_collision = np.empty((size, ), dtype=np.float32)
         self.nonterminals = np.empty((size, 1), dtype=np.float32)
         self.idx = 0
         self.full = False  # Tracks if memory has been filled/all slots are valid
@@ -17,7 +18,8 @@ class ExperienceReplay():
     def append(self, observation, action, reward, done):
         self.observations[self.idx] = observation.numpy()
         self.actions[self.idx] = action.numpy()
-        self.rewards[self.idx] = reward
+        self.rewards_dist[self.idx] = reward
+        # self.rewards_collision[self.idx] = reward[1]
         self.nonterminals[self.idx] = not done
         self.idx = (self.idx + 1) % self.size
         self.full = self.full or self.idx == 0
@@ -34,9 +36,10 @@ class ExperienceReplay():
 
     def _retrieve_batch(self, idxs, n, L):
         vec_idxs = idxs.transpose().reshape(-1)  # Unroll indices
-        return (self.observations[vec_idxs].reshape(L, n, -1), # TODO: why
+        return (self.observations[vec_idxs].reshape(L, n, -1),  # TODO: why
                 self.actions[vec_idxs].reshape(L, n, -1),
-                self.rewards[vec_idxs].reshape(L, n),
+                self.rewards_dist[vec_idxs].reshape(L, n),
+                # self.rewards_collision[vec_idxs].reshape(L, n),
                 self.nonterminals[vec_idxs].reshape(L, n, 1))
 
     # Returns a batch of sequence chunks uniformly sampled from the memory

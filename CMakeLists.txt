@@ -18,7 +18,7 @@ find_package(Boost REQUIRED)
 #       You can use an environment variable `CMAKE_PREFIX_PATH`
 #         or a command line argument `cmake .. -DCMAKE_PREFIX_PATH=<...>`.
 #       The typical location is `<pytorch source>/torch/share/cmake`.
-find_package(Torch 1.6 REQUIRED)
+find_package(Torch REQUIRED)
 
 add_subdirectory(extern/pybind11)
 
