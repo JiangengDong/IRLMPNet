@@ -36,17 +36,17 @@
 /* Modified by: Jiangeng Dong */
 
 #include "planner/RLMPNet.h"
-#include <ompl/base/goals/GoalSampleableRegion.h>
-#include <ompl/base/objectives/MinimaxObjective.h>
-#include <ompl/base/objectives/MaximizeMinClearanceObjective.h>
-#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
-#include <ompl/base/objectives/MechanicalWorkOptimizationObjective.h>
-#include <ompl/tools/config/SelfConfig.h>
-#include <ompl/control/spaces/RealVectorControlSpace.h>
 #include <limits>
+#include <ompl/base/goals/GoalSampleableRegion.h>
+#include <ompl/base/objectives/MaximizeMinClearanceObjective.h>
+#include <ompl/base/objectives/MechanicalWorkOptimizationObjective.h>
+#include <ompl/base/objectives/MinimaxObjective.h>
+#include <ompl/base/objectives/PathLengthOptimizationObjective.h>
+#include <ompl/control/spaces/RealVectorControlSpace.h>
+#include <ompl/tools/config/SelfConfig.h>
 
-ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si, IRLMPNet::Policy::Ptr policy, IRLMPNet::MPNetSampler::Ptr mpnet_sampler) :
-        base::Planner(si, "RLMPNet") {
+
+ompl::control::RLMPNet::RLMPNet(const SpaceInformationPtr &si, IRLMPNet::Policy::Ptr policy, IRLMPNet::MPNetSampler::Ptr mpnet_sampler) : base::Planner(si, "RLMPNet") {
     specs_.approximateSolutions = true;
     siC_ = si.get();
     prevSolution_.clear();
@@ -222,7 +222,7 @@ ompl::base::PlannerStatus ompl::control::RLMPNet::solve(const base::PlannerTermi
     Control *rctrl = rmotion->control_;
     base::State *xstate = si_->allocState();
 
-    base::State* gstate = si_->allocState();
+    base::State *gstate = si_->allocState();
     goal_s->sampleGoal(gstate);
 
     unsigned iterations = 0;

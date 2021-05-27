@@ -7,6 +7,7 @@
 
 #include <boost/format.hpp>
 #include <fstream>
+#include <ompl/base/SpaceInformation.h>
 #include <ompl/base/StateValidityChecker.h>
 #include <string>
 
@@ -112,8 +113,35 @@ namespace IRLMPNet {
                 return true;
             }
 
-            const std::vector<std::array<double, 4>>& getObstacleAABBs() const {
+            const std::vector<std::array<double, 4>> &getObstacleAABBs() const {
                 return _obs_AABBs;
+            }
+
+            Eigen::MatrixXf getLocalMap(const ob::State *state) const {
+                auto state_eig = std::vector<double>(6);
+                si_->getStateSpace()->copyToReals(state_eig, state);
+                Eigen::MatrixXf local_map(64, 64);
+                local_map.fill(0.0);
+                const auto &obs_AABBs = getObstacleAABBs();
+                const float dir_x = cos(state_eig[2]) * 0.5, dir_y = sin(state_eig[2]) * 0.5;
+                const float center_x = state_eig[0], center_y = state_eig[1];
+                float x1, y1, x2, y2;
+                for (unsigned int i = 0; i < 64; i++) {
+                    x1 = (i - 31.5) * dir_x + center_x;
+                    y1 = (i - 31.5) * dir_y + center_y;
+                    for (unsigned int j = 0; j < 64; j++) {
+                        x2 = -(j - 31.5) * dir_y + x1;
+                        y2 = (j - 31.5) * dir_x + y1;
+
+                        for (const auto &obs_AABB : obs_AABBs) {
+                            if (x2 > obs_AABB[0] && x2 < obs_AABB[2] && y2 > obs_AABB[1] && y2 < obs_AABB[3]) {
+                                local_map(i, j) = 1.0;
+                                break;
+                            }
+                        }
+                    }
+                }
+                return local_map;
             }
 
         private:

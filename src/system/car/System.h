@@ -240,7 +240,7 @@ namespace IRLMPNet {
                 Eigen::MatrixXf local_map(64, 64);
                 local_map.fill(0.0);
                 const auto &obs_AABBs = collision_checker->getObstacleAABBs();
-                const float dir_x = cos(state_eig[2]) * 0.2, dir_y = sin(state_eig[2]) * 0.2;
+                const float dir_x = cos(state_eig[2]) * 0.5, dir_y = sin(state_eig[2]) * 0.5;
                 const float center_x = state_eig[0], center_y = state_eig[1];
                 float x1, y1, x2, y2;
                 for (unsigned int i = 0; i < 64; i++) {

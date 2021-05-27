@@ -1,12 +1,17 @@
 #ifndef IRLMPNET_PLANNER_POLICY_H_
 #define IRLMPNET_PLANNER_POLICY_H_
 
+#include <ATen/Functions.h>
+#include <c10/core/DeviceType.h>
+#include <chrono>
+#include <ompl/base/StateValidityChecker.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/control/SpaceInformation.h>
 #include <ompl/control/spaces/RealVectorControlSpace.h>
 #include <torch/script.h>
 
 #include "planner/torch_interface/converter.h"
+#include "system/car/StateValidityChecker.h"
 
 namespace ob = ompl::base;
 namespace oc = ompl::control;
@@ -16,52 +21,72 @@ namespace IRLMPNet {
     public:
         using Ptr = std::shared_ptr<Policy>;
         torch::jit::script::Module policy_model_;
+        torch::jit::script::Module transition_model_;
+        torch::jit::script::Module encoder_model_;
         unsigned int state_dim_;
         unsigned int control_dim_;
         ob::StateSpacePtr state_space_;
         oc::ControlSpacePtr control_space_;
+        ob::StateValidityCheckerPtr collision_checker_;
 
         Policy(const oc::SpaceInformationPtr &space_information, const std::string &model_path) {
             policy_model_ = torch::jit::load(model_path);
             policy_model_.to(at::kCUDA);
+            transition_model_ = torch::jit::load("data/car1order/rl_result/default/torchscript/transition_model.pth");
+            transition_model_.to(at::kCUDA);
+            encoder_model_ = torch::jit::load("data/car1order/rl_result/default/torchscript/observation_encoder.pth");
+            encoder_model_.to(at::kCUDA);
 
             state_dim_ = space_information->getStateDimension();
             control_dim_ = space_information->getControlSpace()->getDimension();
             state_space_ = space_information->getStateSpace(); // Used for debug
             control_space_ = space_information->getControlSpace();
+            collision_checker_ = space_information->getStateValidityChecker();
         }
 
         /// WARNING: The start, goal and control are assumed to be real vector
         void act(const ob::State *start, const ob::State *goal, oc::Control *control) {
-            std::vector<double> state_vec(2 * state_dim_);
+            std::vector<double> state_vec(64 * 64 * 3 + 2 * state_dim_);
             const auto *pstart = start->as<ob::RealVectorStateSpace::StateType>()->values;
             const auto *pgoal = goal->as<ob::RealVectorStateSpace::StateType>()->values;
 
             // normalize
-            auto x_max = std::max(pstart[0], pgoal[0]);
-            auto x_min = std::min(pstart[0], pgoal[0]);
-            auto x_range = x_max - x_min;
-            auto y_max = std::max(pstart[1], pgoal[1]);
-            auto y_min = std::min(pstart[1], pgoal[1]);
-            auto y_range = y_max - y_min;
-            auto xy_range = std::max(x_range, y_range);
-
-            state_vec[0] = 2 * (pstart[0] - x_min) / xy_range - 1;
-            state_vec[1] = 2 * (pstart[1] - y_min) / xy_range - 1;
-            state_vec[2] = pstart[2] / M_PI;
-            state_vec[3] = 2 * (pgoal[0] - x_min) / xy_range - 1;
-            state_vec[4] = 2 * (pgoal[1] - y_min) / xy_range - 1;
-            state_vec[5] = pgoal[2] / M_PI;
+            auto map = static_cast<IRLMPNet::System::CarCollisionChecker *>(collision_checker_.get())->getLocalMap(start);
+            for (unsigned int ch = 0; ch < 3; ch++)
+                for (unsigned int row = 0; row < 64; row++)
+                    for (unsigned int col = 0; col < 64; col++)
+                        state_vec[64 * 64 * ch + 64 * row + col] = map(row, col);
+            state_vec[64 * 64 * 3 + 0] = pstart[0] / 25.0;
+            state_vec[64 * 64 * 3 + 1] = pstart[1] / 35.0;
+            state_vec[64 * 64 * 3 + 2] = pstart[2] / M_PI;
+            state_vec[64 * 64 * 3 + 3] = pgoal[0] / 25.0;
+            state_vec[64 * 64 * 3 + 4] = pgoal[1] / 35.0;
+            state_vec[64 * 64 * 3 + 5] = pgoal[2] / M_PI;
 
             torch::NoGradGuard no_grad;
-            auto policy_input = toTensor(state_vec, state_dim_ * 2).to(at::kCUDA);
-            auto policy_output = policy_model_.forward({policy_input}).toTensor().to(at::kCPU);
+            auto observation = toTensor(state_vec, 64 * 64 * 3 + state_dim_ * 2).to(at::kCUDA);
+            auto encoded_observation = encoder_model_.forward({observation}).toTensor();
+            auto belief = torch::zeros({1, 256}).to(at::kCUDA);
+            auto posterior_state = torch::zeros({1, 32}).to(at::kCUDA);
+            auto action = torch::zeros({1, 2}).to(at::kCUDA);
+            auto transition_output = transition_model_.forward({posterior_state, action.unsqueeze(0), belief, encoded_observation.unsqueeze(0)}).toList();
+            belief = transition_output.get(0).toTensor().squeeze(0);
+            posterior_state = transition_output.get(4).toTensor().squeeze(0);
+
+            // auto start_time = std::chrono::system_clock::now();
+            auto policy_output = policy_model_.forward({belief, posterior_state}).toTensor().to(at::kCPU);
+            // auto end_time = std::chrono::system_clock::now();
+            // std::chrono::duration<double> time = end_time - start_time;
+            // std::cout << "duration: " << time.count() << std::endl;
+
             auto control_vec = toVector(policy_output, control_dim_);
 
             auto *pcontrol = control->as<oc::RealVectorControlSpace::ControlType>()->values;
-            for (unsigned int i = 0; i < control_dim_; i++) {
-                pcontrol[i] = control_vec[i];
-            }
+            // for (unsigned int i = 0; i < control_dim_; i++) {
+            //     pcontrol[i] = control_vec[i];
+            // }
+            pcontrol[0] = control_vec[0] * 3 + 0.5;
+            pcontrol[1] = control_vec[1] * 2;
         }
 
         void actBatch(const std::vector<ob::State *> &starts, const std::vector<ob::State *> goals, std::vector<oc::Control *> &controls, const unsigned int n) {

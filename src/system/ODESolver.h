@@ -6,21 +6,24 @@
 namespace IRLMPNet {
     namespace System {
         /// add two vector together
-        inline void addVec(const double *a, const double *b, const size_t dim, double *c) {
+        template <typename T>
+        inline void addVec(const T *a, const T *b, const size_t dim, T *c) {
             for (size_t i = 0; i < dim; i++) {
                 c[i] = a[i] + b[i];
             }
         }
 
         /// multiply a vector with a scalar
-        inline void mulScalar(const double *a, const double b, const size_t dim, double *c) {
+        template <typename T>
+        inline void mulScalar(const T *a, const T b, const size_t dim, T *c) {
             for (size_t i = 0; i < dim; i++) {
                 c[i] = a[i] * b;
             }
         }
 
         /// copy a vector from source to destination
-        inline void copyVec(const double *a, const size_t dim, double *b) {
+        template <typename T>
+        inline void copyVec(const T *a, const size_t dim, T *b) {
             for (size_t i = 0; i < dim; i++) {
                 b[i] = a[i];
             }
@@ -67,7 +70,7 @@ namespace IRLMPNet {
             addVec(result, k3, state_dim, result);
             addVec(result, k4, state_dim, result);
         }
-    }
+    } // namespace System
 } // namespace IRLMPNet
 
 #endif

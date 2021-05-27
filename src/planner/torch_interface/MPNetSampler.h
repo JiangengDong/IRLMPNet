@@ -26,14 +26,17 @@ namespace IRLMPNet {
             mpnet_model_.to(at::kCUDA);
 
             dim_ = space->as<ob::RealVectorStateSpace>()->getDimension();
-            voxel_ = loadVoxel("data/voxel/car/voxel_0.csv").to(at::kCUDA); //  TODO: turn the file path into an argument
+            voxel_ = loadVoxel("data/car1order/voxel/voxel_0.csv").to(at::kCUDA); //  TODO: turn the file path into an argument
 
             auto bounds = space->as<ob::RealVectorStateSpace>()->getBounds();
             torch::NoGradGuard no_grad;
             auto high_bound_tensor = toTensor(bounds.high, dim_);
             auto low_bound_tensor = toTensor(bounds.low, dim_);
+
             input_normalize_bias_ = torch::tile((high_bound_tensor + low_bound_tensor) / 2.0, {1, 2}).to(at::kCUDA);
+
             input_normalize_scale_ = torch::tile(2.0 / (high_bound_tensor - low_bound_tensor), {1, 2}).to(at::kCUDA); // take reciprocal in advance to accelerate speed
+
             output_normalize_bias_ = ((high_bound_tensor + low_bound_tensor) / 2.0).to(at::kCUDA);
             output_normalize_scale_ = ((high_bound_tensor - low_bound_tensor) / 2.0).to(at::kCUDA);
         }

@@ -5,11 +5,13 @@
 #ifndef IRLMPNET_SYSTEM_CAR_PROPAGATOR_H
 #define IRLMPNET_SYSTEM_CAR_PROPAGATOR_H
 
+#include <ompl/control/SpaceInformation.h>
 #include <ompl/control/StatePropagator.h>
 
 #include "system/ODESolver.h"
-#include "system/car/StateSpace.h"
 #include "system/car/ControlSpace.h"
+#include "system/car/StateSpace.h"
+
 
 namespace oc = ompl::control;
 namespace ob = ompl::base;
@@ -56,7 +58,7 @@ namespace IRLMPNet {
                 result[2] = w;
             }
         };
-    }
+    } // namespace System
 } // namespace IRLMPNet
 
 #endif //IRLMPNET_SYSTEM_CAR_PROPAGATOR_H
