@@ -138,7 +138,7 @@ int main(int argc, char **argv) {
         std::stringstream ss;
         ss << "data/car1order/test_traj/path" << i << ".csv";
 
-        auto [time, length] = car1order_control(start, goal, 0.5, RLMPNet, 300.0, 500.0, ss.str());
+        auto [time, length] = car1order_control(start, goal, 0.5, SST, 300.0, 500.0, ss.str());
         if (time < 499.0) {
             std::cout << "Find traj. Save in " << ss.str() << std::endl;
             i++;
