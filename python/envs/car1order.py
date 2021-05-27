@@ -59,7 +59,8 @@ class Car1OrderEnv:
     def reset(self):
         # random start and goal. They are assumed to be easy to sample
         while True:
-            if self.system.sample_valid_state(self.state) and self.system.sample_valid_state(self.goal) and np.linalg.norm(self.state-self.goal) < 10:
+            if self.system.sample_valid_state(self.state) and self.system.sample_valid_state(self.goal) and np.linalg.norm(self.state-self.goal) < 20:
+                # if self.system.sample_valid_state(self.state) and self.system.sample_valid_state(self.goal):
                 self.normalized_state = (self.state - self.state_center) / self.state_range
                 self.normalized_goal = (self.goal - self.state_center) / self.state_range
                 break
@@ -97,7 +98,7 @@ class Car1OrderEnv:
             if self.step_count == self.max_episode_length or dist < 0.01 or is_collided:
                 self.done = True
 
-        return self.get_ob(), (reward_dist + (-1 if is_collided else 0)), self.done
+        return self.get_ob(), (reward_dist + (-10 if is_collided else 0)), self.done
 
     def render(self, mode="rgb_array"):
         raise NotImplementedError

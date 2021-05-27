@@ -46,4 +46,4 @@ class ExperienceReplay():
     def sample(self, n, L):
         idxs = np.asarray([self._sample_idx(L) for _ in range(n)])
         batch = self._retrieve_batch(idxs, n, L)
-        return [torch.as_tensor(item).to(device=self.device) for item in batch]
+        return [torch.as_tensor(item).to(device=self.device, non_blocking=True) for item in batch]

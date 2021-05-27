@@ -13,17 +13,12 @@ import argparse
 import logging
 import os
 from math import inf
+import json
 
-import cv2
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvas
-from matplotlib.collections import PatchCollection
-from matplotlib.figure import Figure
-from matplotlib.patches import Arrow, Rectangle
-from matplotlib.transforms import Affine2D
-from torch import nn, optim
+
+from torch import nn, optim, jit
 from torch.distributions import Normal
 from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
@@ -35,6 +30,7 @@ from memory import ExperienceReplay
 from models import (ObservationEncoder, ObservationModel, RewardModel,
                     TransitionModel, bottle)
 from planner import MPCPlanner
+from visual import visualize_global_map, visualize_local_map
 
 
 def get_args():
@@ -45,19 +41,20 @@ def get_args():
     parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
 
     # environment configs
-    parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
+    parser.add_argument('--max-episode-length', type=int, default=500, metavar='T', help='Max episode length')
     parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
     parser.add_argument('--render', action='store_true', help='Render environment')
+    parser.add_argument('--obstacle-index', type=int, default=0, help='Obstacle index')
 
     # replay buffer configs
-    parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')
+    parser.add_argument('--experience-size', type=int, default=10000, metavar='D', help='Experience replay size')
 
     # network configs
     parser.add_argument('--activation-function', type=str, default='relu', choices=dir(F), help='Model activation function')
     parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', help='Observation embedding size')
-    parser.add_argument('--hidden-size', type=int, default=200, metavar='H', help='Hidden size')
-    parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
-    parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
+    parser.add_argument('--hidden-size', type=int, default=256, metavar='H', help='Hidden size')
+    parser.add_argument('--belief-size', type=int, default=256, metavar='H', help='Belief/hidden size')
+    parser.add_argument('--state-size', type=int, default=32, metavar='Z', help='State/latent size')
 
     # MPC planner configs
     parser.add_argument('--action-noise', type=float, default=0.3, metavar='ε', help='Action noise')
@@ -70,7 +67,7 @@ def get_args():
     parser.add_argument('--episodes', type=int, default=200, metavar='E', help='Total number of episodes')
     parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
     parser.add_argument('--collect-interval', type=int, default=100, metavar='C', help='Collect interval')
-    parser.add_argument('--batch-size', type=int, default=50, metavar='B', help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=10, metavar='B', help='Batch size')
     parser.add_argument('--chunk-size', type=int, default=50, metavar='L', help='Chunk size')
     parser.add_argument('--overshooting-distance', type=int, default=50, metavar='D', help='Latent overshooting distance/latent overshooting weight for t = 1')
     parser.add_argument('--overshooting-kl-beta', type=float, default=0, metavar='β>1', help='Latent overshooting KL weight for t > 1 (0 to disable)')
@@ -87,61 +84,68 @@ def get_args():
     # test configs
     parser.add_argument('--test', action='store_true', help='Test only')
     parser.add_argument('--test-interval', type=int, default=25,  metavar='I', help='Test interval (episodes)')
-    parser.add_argument('--test-episodes', type=int, default=10, metavar='E', help='Number of test episodes')
+    parser.add_argument('--test-episodes', type=int, default=1, metavar='E', help='Number of test episodes')
 
     # checkpoint configs
     parser.add_argument('--checkpoint-interval', type=int, default=50, metavar='I', help='Checkpoint interval (episodes)')
     parser.add_argument('--checkpoint-experience', action='store_true', help='Checkpoint experience replay')
 
     # continue training
-    parser.add_argument('--models', type=str, default='', metavar='M', help='Load model checkpoint')
-    parser.add_argument('--experience-replay', type=str, default='', metavar='ER', help='Load experience replay')
+    parser.add_argument('--result-dir', type=str, help='Default value is set according to ID. Override with this option.')
+    parser.add_argument('--checkpoint-dir', type=str, help='Default value is set according to ID. Override with this option.')
+    parser.add_argument('--checkpoint-path', type=str, help='Default value is set according to ID. Override with this option.')
+    parser.add_argument('--tensorboard-dir', type=str, help='Default value is set according to ID. Override with this option.')
+    parser.add_argument('--torchscript-dir', type=str, help='Default value is set according to ID. Override with this option.')
+    parser.add_argument("--video-dir", type=str, help='Default value is set according to ID. Override with this option.')
 
     args = parser.parse_args()
-
-    # Jiangeng's modification: override default arguments
-    args.max_episode_length = 500  # 50 sec.
-    args.render = False
-
-    args.experience_size = 10000
-
-    args.embedding_size = 1024
-    args.hidden_size = 256
-    args.belief_size = 256
-    args.state_size = 32
-
-    args.batch_size = 10
-
-    args.test_interval = 20
-    args.test_episodes = 1
-    args.checkpoint_interval = 5
-
-    args.action_noise = 0.3
 
     return args
 
 
 def postprocess_args(args):
     # check validity of args and add additional args
-    args.overshooting_distance = min(
-        args.chunk_size, args.overshooting_distance)
+    args.overshooting_distance = min(args.chunk_size, args.overshooting_distance)
 
     if torch.cuda.is_available() and not args.disable_cuda:
         args.device = torch.device('cuda')
     else:
         args.device = torch.device('cpu')
 
-    print(' ' * 16 + 'Options')
+    args.result_dir = args.result_dir or os.path.join('data/car1order/rl_result', args.id)
+    args.checkpoint_dir = args.checkpoint_dir or os.path.join(args.result_dir, "checkpoint")
+    args.tensorboard_dir = args.tensorboard_dir or os.path.join(args.result_dir, "tensorboard")
+    args.torchscript_dir = args.torchscript_dir or os.path.join(args.result_dir, "torchscript")
+    args.video_dir = args.video_dir or os.path.join(args.result_dir, "video")
+
+    record_path = os.path.join(args.checkpoint_dir, "checkpoint")
+    if os.path.exists(record_path):
+        with open(record_path) as f:
+            args.checkpoint_path = args.checkpoint_path or os.path.join(args.checkpoint_dir, f.readline().rstrip('\n'))
+
+    print('Options')
     for k, v in vars(args).items():
-        print(' ' * 16 + k + ': ' + str(v))
+        print('\t' + k + ': ' + str(v))
 
     return args
 
 
+def save_args(args: argparse.Namespace):
+    args_dict = args.__dict__.copy()
+    args_dict.pop("device")
+    with open(os.path.join(args.result_dir, "args.json"), "w") as f:
+        json.dump(args_dict, f, indent=2)
+
+
 def setup_workdir(args):
-    results_dir = os.path.join('results', args.id)
-    os.makedirs(results_dir, exist_ok=True)
-    return results_dir
+    os.makedirs(args.result_dir, exist_ok=True)
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    os.makedirs(args.torchscript_dir, exist_ok=True)
+    os.makedirs(args.video_dir, exist_ok=True)
+    os.makedirs(args.tensorboard_dir, exist_ok=True)
+
+    for filename in os.listdir(args.tensorboard_dir):
+        os.remove(os.path.join(args.tensorboard_dir, filename))
 
 
 def setup_seed(args):
@@ -161,30 +165,20 @@ def setup_env(args):
 
 
 def setup_replay(args, env):
-    if args.test:
-        D = None
-    elif args.experience_replay != '':
-        if os.path.exists(args.experience_replay):
-            D = torch.load(args.experience_replay)
-        else:
-            D = None
-            logging.warning("Replay buffer file: {} does not exist".format(
-                args.experience_replay))
-    else:
-        D = ExperienceReplay(
-            args.experience_size,
-            env.observation_size,
-            env.action_size,
-            args.device
-        )
-        # Initialise dataset D with random seed episodes
-        for _ in range(1, args.seed_episodes + 1):
-            observation, done = env.reset(), False
-            while not done:
-                action = env.sample_random_action()
-                next_observation, reward, done = env.step(action)
-                D.append(observation, action, reward, done)
-                observation = next_observation
+    D = ExperienceReplay(
+        args.experience_size,
+        env.observation_size,
+        env.action_size,
+        args.device
+    )
+    # Initialise dataset D with random seed episodes
+    for _ in range(1, args.seed_episodes + 1):
+        observation, done = env.reset(), False
+        while not done:
+            action = env.sample_random_action()
+            next_observation, reward, done = env.step(action)
+            D.append(observation, action, reward, done)
+            observation = next_observation
 
     return D
 
@@ -229,17 +223,16 @@ def setup_models(args, env):
         eps=args.adam_epsilon)
 
     # load parameters
-    if args.models != '':
-        if os.path.exists(args.models):
-            model_dicts = torch.load(args.models)
+    if args.checkpoint_path is not None:
+        if os.path.exists(args.checkpoint_path):
+            model_dicts = torch.load(args.checkpoint_path)
             transition_model.load_state_dict(model_dicts['transition_model'])
             observation_model.load_state_dict(model_dicts['observation_model'])
             reward_model.load_state_dict(model_dicts['reward_model'])
             encoder.load_state_dict(model_dicts['encoder'])
             optimiser.load_state_dict(model_dicts['optimiser'])
         else:
-            logging.warning(
-                "Model weight file: {} does not exist".format(args.models))
+            logging.warning("Model weight file: {} does not exist".format(args.checkpoint_path))
 
     return (transition_model, observation_model, reward_model, encoder), optimiser, param_list
 
@@ -260,18 +253,16 @@ def setup_planner(args, env, transition_model, reward_model):
 
 
 def setup(args):
-    setup_seed(args)
-
-    results_dir = setup_workdir(args)
+    if not args.test:
+        setup_seed(args)
+        setup_workdir(args)
+        save_args(args)
     env = setup_env(args)
-
     D = setup_replay(args, env)
-
     models, optimiser, param_list = setup_models(args, env)
-
     planner = setup_planner(args, env, models[0], models[2])
 
-    return results_dir, env, D, models, optimiser, param_list, planner
+    return env, D, models, optimiser, param_list, planner
 
 
 def collect_experience(args, env, models, planner, explore=True, desc="Collecting episode"):
@@ -333,121 +324,38 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
     return experience
 
 
-def visualize_local_map(filename, observations):
-    observations = observations[:, :3*64*64] + 0.5
-    observations = observations.view(-1, 3, 64, 64)
-    observations = torch.movedim(observations, 1, 3).cpu().numpy().astype(np.uint8)*255
-    _, H, W, _ = observations.shape
-    writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), 30., (W, H), True)
-    for observation in observations:
-        writer.write(observation)
-    writer.release()
-
-
-def visualize_global_map(filename, observations, predictions):
-    observations = observations[:, 3*64*64:].cpu().numpy()
-    observations = observations * \
-        np.array([25.0, 35.0, np.pi, 25.0, 35.0, np.pi],
-                 dtype=np.float32) * 2.0
-
-    predictions = predictions[:, 3*64*64:].cpu().numpy()
-    predictions = predictions * \
-        np.array([25.0, 35.0, np.pi, 25.0, 35.0, np.pi],
-                 dtype=np.float32) * 2.0
-
-    obs_center = np.array([
-        -3.361066383373184863e+00,
-        -1.618362447483236366e+01,
-        1.754212158819116496e+01,
-        2.327441671685363644e+01,
-        1.601334192118773814e+01,
-        -2.177019678231786415e+01,
-        -5.782483885379246402e+00,
-        1.975485323546972438e+01,
-        -2.041836004624516931e+01,
-        5.669245497190956939e+00,
-    ]).reshape(5, 2)
-    obstacles = [Rectangle((xy[0]-4, xy[1]-4), 8, 8) for xy in obs_center]
-    obstacles = PatchCollection(obstacles, facecolor="gray", edgecolor="black")
-
-    car_observation = PatchCollection([Rectangle(
-        (-1, -0.5), 2, 1), Arrow(0, 0, 2, 0, width=1.0)], facecolor="blue", edgecolor="blue")
-    car_prediction = PatchCollection([Rectangle(
-        (-1, -0.5), 2, 1), Arrow(0, 0, 2, 0, width=1.0)], facecolor="yellow", edgecolor="yellow")
-
-    fig = Figure()
-    canvas = FigureCanvas(fig)
-    ax = fig.subplots()
-    ax.set_aspect('equal', 'box')
-    ax.set_xlim([-25, 25])
-    ax.set_ylim([-35, 35])
-
-    canvas.draw()
-    image = np.array(canvas.buffer_rgba())
-    H, W, _ = image.shape
-    writer = cv2.VideoWriter(
-        filename, cv2.VideoWriter_fourcc(*'mp4v'), 30., (W, H), True)
-
-    T = observations.shape[0]
-    for t in range(T):
-        # obstacles
-        ax.add_collection(obstacles)
-        # target
-        ax.scatter(observations[-1, 3],
-                   observations[-1, 4], marker='*', c="red")
-        # current position
-        transform = Affine2D().rotate(observations[t, 2]).translate(
-            observations[t, 0], observations[t, 1])
-        car_observation.set_transform(transform+ax.transData)
-        ax.add_collection(car_observation)
-        # predicted position
-        transform = Affine2D().rotate(predictions[t, 2]).translate(
-            predictions[t, 0], predictions[t, 1])
-        car_prediction.set_transform(transform+ax.transData)
-        ax.add_collection(car_prediction)
-        # plot
-        canvas.draw()
-        image = np.array(canvas.buffer_rgba())[:, :, :3]
-        writer.write(image)
-        ax.clear()
-
-    writer.release()
-
-
-def test(args, results_dir, env, models, planner):
+def test(args, env, models, planner):
     for model in models:
         model.eval()
 
     # unpack models
     transition_model, observation_model, reward_model, encoder = models
     # collect an episode
-    experience = collect_experience(
-        args, env, models, planner, False, desc="Collecting experience 0")
     with torch.no_grad():
+        experience = collect_experience(args, env, models, planner, False, desc="Collecting experience 0")
         # get observations and predictions
         observations = torch.cat(experience["observation"], dim=0)
         beliefs = torch.cat(experience["belief"], dim=0)
         states = torch.cat(experience["state"], dim=0)
         predictions = observation_model.forward(beliefs.to(args.device), states.to(args.device))
         # visualize them
-        visualize_local_map(os.path.join(results_dir, "observation.mp4"), observations)
-        visualize_local_map(os.path.join(results_dir, "prediction.mp4"), predictions)
-        visualize_global_map(os.path.join(results_dir, "global.mp4"), observations, predictions)
+        visualize_local_map(os.path.join(args.video_dir, "observation.mp4"), observations)
+        visualize_local_map(os.path.join(args.video_dir, "prediction.mp4"), predictions)
+        visualize_global_map(os.path.join(args.video_dir, "global.mp4"), args.obstacle_index, observations, predictions)
 
     for model in models:
         model.train()
 
 
-def train(args, results_dir, env, D, models, optimiser, param_list, planner):
+def train(args, env, D, models, optimiser, param_list, planner):
     # auxilliary tensors
     global_prior = Normal(
         torch.zeros(args.batch_size, args.state_size, device=args.device),
         torch.ones(args.batch_size, args.state_size, device=args.device)
     )  # Global prior N(0, I)
     # Allowed deviation in KL divergence
-    free_nats = torch.full((1, ), args.free_nats,
-                           dtype=torch.float32, device=args.device)
-    summary_writter = SummaryWriter(os.path.join(results_dir, "tensorboard"))
+    free_nats = torch.full((1, ), args.free_nats, dtype=torch.float32, device=args.device)
+    summary_writter = SummaryWriter(args.tensorboard_dir)
 
     # unpack models
     transition_model, observation_model, reward_model, encoder = models
@@ -458,13 +366,10 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
             # The first two dimensions of the tensors are L (chunk size) and n (batch_size)
             # We want to use o[t+1] to correct the error of the transition model,
             # so we need to convert the sequence to {(o[t+1], a[t], r[t+1], z[t+1])}
-            observations, actions, rewards, nonterminals = D.sample(
-                args.batch_size, args.chunk_size)
+            observations, actions, rewards, nonterminals = D.sample(args.batch_size, args.chunk_size)
             # Create initial belief and state for time t = 0
-            init_belief = torch.zeros(
-                args.batch_size, args.belief_size, device=args.device)
-            init_state = torch.zeros(
-                args.batch_size, args.state_size, device=args.device)
+            init_belief = torch.zeros(args.batch_size, args.belief_size, device=args.device)
+            init_state = torch.zeros(args.batch_size, args.state_size, device=args.device)
             # Transition model forward
             # deterministic: h[t+1] = f(h[t], a[t])
             # prior:         s[t+1] ~ Prob(s|h[t+1])
@@ -478,24 +383,20 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
             )
 
             # observation loss
-            predictions = bottle(
-                observation_model, (beliefs, posterior_states))
+            predictions = bottle(observation_model, (beliefs, posterior_states))
             visual_loss = F.mse_loss(
-                predictions[:, :3*64*64],
-                observations[1:, :3*64*64],
-                reduction='none'
-            ).mean(dim=2).mean(dim=(0, 1))
+                predictions[:, :, :3*64*64],
+                observations[1:, :, :3*64*64]
+            ).mean()
             symbol_loss = F.mse_loss(
-                predictions[:, 3*64*64:],
-                observations[1:, 3*64*64:],
-                reduction='none'
-            ).mean(dim=2).mean(dim=(0, 1))
+                predictions[:, :, 3*64*64:],
+                observations[1:, :, 3*64*64:]
+            ).mean()
             observation_loss = visual_loss + symbol_loss
 
             # reward loss
             reward_loss = F.mse_loss(
-                bottle(reward_model, (beliefs,
-                                      posterior_states)),
+                bottle(reward_model, (beliefs, posterior_states)),
                 rewards[:-1],
                 reduction='none'
             ).mean(dim=(0, 1))
@@ -584,7 +485,7 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                         group['lr'] + args.learning_rate / args.learning_rate_schedule, args.learning_rate)
             # Update model parameters
             optimiser.zero_grad()
-            loss = observation_loss + reward_loss + kl_loss
+            loss = observation_loss * 200 + reward_loss + kl_loss
             loss.backward()
             nn.utils.clip_grad_norm_(
                 param_list, args.grad_clip_norm, norm_type=2)
@@ -596,8 +497,7 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
             summary_writter.add_scalar("kl_loss", kl_loss, global_step)
 
         for idx_collect in trange(1, leave=False, desc="Collecting"):
-            experience = collect_experience(
-                args, env, models, planner, True, desc="Collecting experience {}".format(idx_collect))
+            experience = collect_experience(args, env, models, planner, True, desc="Collecting experience {}".format(idx_collect))
             T = len(experience["observation"])
             for idx_step in range(T):
                 D.append(experience["observation"][idx_step],
@@ -606,8 +506,9 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                          experience["done"][idx_step])
 
         # Checkpoint models
-        if (idx_episode+1) % args.checkpoint_interval == 0:
-            os.makedirs(os.path.join(results_dir, "pytorch_model"), exist_ok=True)
+        if (idx_episode + 1) % args.checkpoint_interval == 0:
+            record_path = os.path.join(args.checkpoint_dir, "checkpoint")
+            checkpoint_path = os.path.join(args.checkpoint_dir, 'models_%d.pth' % (idx_episode+1))
             torch.save(
                 {
                     'transition_model': transition_model.state_dict(),
@@ -616,21 +517,24 @@ def train(args, results_dir, env, D, models, optimiser, param_list, planner):
                     'encoder': encoder.state_dict(),
                     'optimiser': optimiser.state_dict()
                 },
-                os.path.join(results_dir, "pytorch_model", 'models_%d.pth' % idx_episode))
-            if args.checkpoint_experience:
-                # Warning: will fail with MemoryError with large memory sizes
-                torch.save(D, os.path.join(results_dir, "pytorch_model", 'experience.pth'))
+                checkpoint_path)
+            with open(record_path, "w") as f:
+                f.write('models_%d.pth' % (idx_episode+1))
+            planner.save(os.path.join(args.torchscript_dir, "mpc_planner.pth"))
+            transition_model.save(os.path.join(args.torchscript_dir, "transition_model.pth"))
+            reward_model.save(os.path.join(args.torchscript_dir, "reward_model.pth"))
+            observation_model.save(os.path.join(args.torchscript_dir, "observation_decoder.pth"))
+            encoder.save(os.path.join(args.torchscript_dir, "observation_encoder.pth"))
 
     summary_writter.close()
 
 
 def main():
     args = postprocess_args(get_args())
-    results_dir, env, D, models, optimiser, param_list, planner = setup(args)
-    if args.test:
-        test(args, results_dir, env, models, planner)
-    else:
-        train(args, results_dir, env, D, models, optimiser, param_list, planner)
+    env, D, models, optimiser, param_list, planner = setup(args)
+    if not args.test:
+        train(args, env, D, models, optimiser, param_list, planner)
+    test(args, env, models, planner)
 
 
 if __name__ == "__main__":
