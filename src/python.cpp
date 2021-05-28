@@ -4,14 +4,14 @@
 
 #include "pybind11/eigen.h"
 #include "pybind11/pybind11.h"
-#include "system/car/System.h"
+#include "system/car/SystemPython.h"
 
 namespace py = pybind11;
-using Car1OrderSystem = IRLMPNet::System::Car1OrderSystem;
+using Car1OrderSystem = IRLMPNet::System::Car1OrderSystemPython;
 
 PYBIND11_MODULE(KinoDynSys, m) {
     py::class_<Car1OrderSystem>(m, "Car1OrderSystem")
-        .def(py::init<const unsigned int>(), py::arg("obstacle_index")=0)
+        .def(py::init<const unsigned int>(), py::arg("obstacle_index") = 0)
         .def_property_readonly("state_dim", &Car1OrderSystem::getStateDim_py)
         .def_property_readonly("state_lower_bound", &Car1OrderSystem::getStateLowerBound_py)
         .def_property_readonly("state_upper_bound", &Car1OrderSystem::getStateUpperBound_py)
