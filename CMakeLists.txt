@@ -23,7 +23,13 @@ find_package(Torch REQUIRED)
 
 add_subdirectory(extern/pybind11)
 
-add_subdirectory(extern/cnpy)
-set(CNPY_INCLUDE_DIRS "extern/cnpy")
+find_package(ZLIB)
+add_library(cnpy-static STATIC
+    extern/cnpy/cnpy.cpp)
+target_link_libraries(cnpy-static PUBLIC
+    ${ZLIB_LIBRARIES})
+target_include_directories(cnpy-static PUBLIC
+    ${ZLIB_INCLUDE_DIRS}
+    ./extern)
 
 add_subdirectory(src bin)

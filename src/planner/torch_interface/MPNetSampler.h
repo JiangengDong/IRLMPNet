@@ -4,6 +4,7 @@
 #include "planner/torch_interface/converter.h"
 #include <fstream>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
+#include <torch/csrc/jit/api/module.h>
 #include <torch/script.h>
 
 namespace ob = ompl::base;
@@ -21,8 +22,8 @@ namespace IRLMPNet {
         torch::Tensor output_normalize_bias_;
         torch::Tensor output_normalize_scale_;
 
-        MPNetSampler(const ob::StateSpace *space, const std::string &mpnet_path) : ob::RealVectorStateSampler(space) {
-            mpnet_model_ = torch::jit::load(mpnet_path);
+        MPNetSampler(const ob::StateSpace *space, torch::jit::Module mpnet_module) : ob::RealVectorStateSampler(space) {
+            mpnet_model_ = std::move(mpnet_module);
             mpnet_model_.to(at::kCUDA);
 
             dim_ = space->as<ob::RealVectorStateSpace>()->getDimension();

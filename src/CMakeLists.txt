@@ -17,8 +17,6 @@ add_executable(IRLMPNet
     main.cpp
     planner/src/RLMPNet.cpp
     planner/src/RLMPNetTree.cpp)
-target_include_directories(IRLMPNet PRIVATE
-    ${CNPY_INCLUDE_DIRS})
 target_link_libraries(IRLMPNet PRIVATE
     torch
     Eigen3::Eigen

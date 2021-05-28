@@ -20,21 +20,21 @@ namespace IRLMPNet {
     class Policy {
     public:
         using Ptr = std::shared_ptr<Policy>;
-        torch::jit::script::Module policy_model_;
-        torch::jit::script::Module transition_model_;
-        torch::jit::script::Module encoder_model_;
+        torch::jit::Module policy_model_;
+        torch::jit::Module transition_model_;
+        torch::jit::Module encoder_model_;
         unsigned int state_dim_;
         unsigned int control_dim_;
         ob::StateSpacePtr state_space_;
         oc::ControlSpacePtr control_space_;
         ob::StateValidityCheckerPtr collision_checker_;
 
-        Policy(const oc::SpaceInformationPtr &space_information, const std::string &model_path) {
-            policy_model_ = torch::jit::load(model_path);
+        Policy(const oc::SpaceInformationPtr &space_information, torch::jit::Module policy_model, torch::jit::Module transition_model, torch::jit::Module encoder_model) {
+            policy_model_ = std::move(policy_model);
             policy_model_.to(at::kCUDA);
-            transition_model_ = torch::jit::load("data/car1order/rl_result/default/torchscript/transition_model.pth");
+            transition_model_ = std::move(transition_model);
             transition_model_.to(at::kCUDA);
-            encoder_model_ = torch::jit::load("data/car1order/rl_result/default/torchscript/observation_encoder.pth");
+            encoder_model_ = std::move(encoder_model);
             encoder_model_.to(at::kCUDA);
 
             state_dim_ = space_information->getStateDimension();
