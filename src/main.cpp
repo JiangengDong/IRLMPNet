@@ -1,6 +1,8 @@
 #include "planner/RLMPNet.h"
 #include "planner/RLMPNetTree.h"
+#include "system/car/ControlSpace.h"
 #include "system/car/System.h"
+#include <boost/format/format_fwd.hpp>
 #include <cmath>
 #include <cnpy/cnpy.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
@@ -14,90 +16,9 @@ namespace oc = ompl::control;
 namespace ob = ompl::base;
 using namespace IRLMPNet;
 
-enum PlannerType {
-    SST = 0,
-    RLMPNet,
-    RLMPNetTree,
-};
-
-std::tuple<double, double> car1order_control(
-    const std::vector<double> start_vec,
-    const std::vector<double> goal_vec,
-    const double goal_radius,
-    const PlannerType planner_type,
-    const double time_limit,
-    const double cost_limit,
-    const std::string output_filename) {
-    double length = std::numeric_limits<double>::infinity(), time = std::numeric_limits<double>::infinity();
-    auto car_system = std::make_shared<System::Car1OrderSystem>();
-    auto simple_setup = std::make_shared<oc::SimpleSetup>(car_system->space_information);
-    auto objective = std::make_shared<ob::PathLengthOptimizationObjective>(car_system->space_information);
-    objective->setCostThreshold(ob::Cost(cost_limit));
-    simple_setup->setOptimizationObjective(objective);
-
-    ob::ScopedState<System::Car1OrderStateSpace> start(car_system->state_space);
-
-    car_system->state_space->copyFromReals(start.get(), start_vec);
-
-    ob::ScopedState<System::Car1OrderStateSpace> goal(car_system->state_space);
-    car_system->state_space->copyFromReals(goal.get(), goal_vec);
-
-    simple_setup->setStartAndGoalStates(start, goal, goal_radius);
-    std::cout << "start: ";
-    car_system->space_information->printState(start.get());
-    std::cout << "goal:  ";
-    car_system->space_information->printState(goal.get());
-
-    ob::PlannerPtr planner;
-    switch (planner_type) {
-        case SST: {
-            planner = std::make_shared<oc::SST>(car_system->space_information);
-            break;
-        }
-        case RLMPNet: {
-            auto planner_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/mpc_planner.pth");
-            auto transition_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/transition_model.pth");
-            auto encoder_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/observation_encoder.pth");
-            auto policy = std::make_shared<Policy>(car_system->space_information, planner_model, transition_model, encoder_model);
-            auto mpnet_model = torch::jit::load("data/car1order/mpnet_result/default/torchscript/mpnet_script.pt");
-            auto mpnet_sampler = std::make_shared<MPNetSampler>(car_system->state_space.get(), mpnet_model);
-            planner = std::make_shared<oc::RLMPNet>(car_system->space_information, policy, mpnet_sampler);
-
-            break;
-        }
-        default: {
-            std::cout << "Invalid planner! " << std::endl;
-            return {time, length};
-        }
-    }
-
-    simple_setup->setPlanner(planner);
-
-    simple_setup->setup();
-
-    ob::PlannerStatus solved = simple_setup->solve(time_limit);
-
-    if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
-        std::cout << "Found solution" << std::endl;
-        length = simple_setup->getSolutionPath().length();
-        time = simple_setup->getLastPlanComputationTime();
-
-        std::ofstream output_csv(output_filename);
-        simple_setup->getSolutionPath().printAsMatrix(output_csv);
-        output_csv.close();
-    } else if (solved == ob::PlannerStatus::APPROXIMATE_SOLUTION) {
-        std::cout << "Found approximate solution" << std::endl;
-    } else {
-        std::cout << "No solution found" << std::endl;
-    }
-
-    return {time, length};
-}
-
 using StatesVec = std::vector<std::vector<double>>;
 
 std::tuple<StatesVec, StatesVec> sampleStartGoal(unsigned int n) {
-
     auto car_system = std::make_shared<System::Car1OrderSystem>();
     std::vector<std::vector<double>> starts(n), goals(n);
 
@@ -164,17 +85,129 @@ std::tuple<StatesVec, StatesVec> loadStartGoal(unsigned int n, std::string start
     return {starts, goals};
 }
 
+enum PlannerType {
+    SST = 0,
+    RLMPNet,
+    RLMPNetTree,
+};
+
+std::tuple<double, double> car1order_control(
+    const std::vector<double> start_vec,
+    const std::vector<double> goal_vec,
+    const double goal_radius,
+    const PlannerType planner_type,
+    const double time_limit,
+    const double cost_limit,
+    const std::string output_filename,
+    const unsigned int index) {
+    double length = std::numeric_limits<double>::infinity(), time = std::numeric_limits<double>::infinity();
+    auto car_system = std::make_shared<System::Car1OrderSystem>();
+    auto simple_setup = std::make_shared<oc::SimpleSetup>(car_system->space_information);
+    auto objective = std::make_shared<ob::PathLengthOptimizationObjective>(car_system->space_information);
+    objective->setCostThreshold(ob::Cost(cost_limit));
+    simple_setup->setOptimizationObjective(objective);
+
+    ob::ScopedState<System::Car1OrderStateSpace> start(car_system->state_space);
+
+    car_system->state_space->copyFromReals(start.get(), start_vec);
+
+    ob::ScopedState<System::Car1OrderStateSpace> goal(car_system->state_space);
+    car_system->state_space->copyFromReals(goal.get(), goal_vec);
+
+    simple_setup->setStartAndGoalStates(start, goal, goal_radius);
+    std::cout << "start: ";
+    car_system->space_information->printState(start.get());
+    std::cout << "goal:  ";
+    car_system->space_information->printState(goal.get());
+
+    ob::PlannerPtr planner;
+    switch (planner_type) {
+        case SST: {
+            planner = std::make_shared<oc::SST>(car_system->space_information);
+            break;
+        }
+        case RLMPNet: {
+            auto planner_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/mpc_planner.pth");
+            auto transition_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/transition_model.pth");
+            auto encoder_model = torch::jit::load("data/car1order/rl_result/test2/torchscript/observation_encoder.pth");
+            auto policy = std::make_shared<Policy>(car_system->space_information, planner_model, transition_model, encoder_model);
+            auto mpnet_model = torch::jit::load("data/car1order/mpnet_result/default/torchscript/mpnet_script.pt");
+            auto mpnet_sampler = std::make_shared<MPNetSampler>(car_system->state_space.get(), mpnet_model);
+            planner = std::make_shared<oc::RLMPNet>(car_system->space_information, policy, mpnet_sampler);
+
+            break;
+        }
+        default: {
+            std::cout << "Invalid planner! " << std::endl;
+            return {time, length};
+        }
+    }
+
+    simple_setup->setPlanner(planner);
+
+    simple_setup->setup();
+
+    ob::PlannerStatus solved = simple_setup->solve(time_limit);
+
+    if (solved == ob::PlannerStatus::EXACT_SOLUTION) {
+        std::cout << "Found solution" << std::endl;
+        length = simple_setup->getSolutionPath().length();
+        time = simple_setup->getLastPlanComputationTime();
+
+        auto path = simple_setup->getSolutionPath();
+        auto states = path.getStates();
+        auto controls = path.getControls();
+        auto durations = path.getControlDurations();
+        const auto n = path.getStateCount();
+        const size_t state_size = 3;
+        const size_t control_size = 2;
+        const size_t row_size = state_size + control_size + 1;
+        std::vector<double> flatten_traj(n * row_size);
+        // first n-1 elements
+        for (size_t i = 0; i < n - 1; i++) {
+            auto pstate = states[i]->as<System::Car1OrderStateSpace::StateType>()->values;
+            auto pcontrol = controls[i]->as<System::Car1OrderControlSpace::ControlType>()->values;
+            for (size_t j = 0; j < state_size; j++) {
+                flatten_traj[i * row_size + j] = pstate[j];
+            }
+            for (size_t j = 0; j < control_size; j++) {
+                flatten_traj[i * row_size + state_size + j] = pcontrol[j];
+            }
+            flatten_traj[i * row_size + state_size + control_size] = durations[i];
+        }
+        // last state has no following controls
+        size_t i = n - 1;
+        auto pstate = states[i]->as<System::Car1OrderStateSpace::StateType>()->values;
+        for (size_t j = 0; j < state_size; j++) {
+            flatten_traj[i * row_size + j] = pstate[j];
+        }
+        for (size_t j = 0; j < control_size; j++) {
+            flatten_traj[i * row_size + state_size + j] = 0;
+        }
+        flatten_traj[i * row_size + state_size + control_size] = 0;
+
+        // save file
+        auto mode = (index == 0) ? "w" : "a";
+        std::string dataset_name = (boost::format("traj%d") % index).str();
+        cnpy::npz_save(output_filename, dataset_name, flatten_traj.data(), {n, row_size}, mode);
+    } else if (solved == ob::PlannerStatus::APPROXIMATE_SOLUTION) {
+        std::cout << "Found approximate solution" << std::endl;
+    } else {
+        std::cout << "No solution found" << std::endl;
+    }
+
+    return {time, length};
+}
+
 int main(int argc, char **argv) {
-    const unsigned int N = 500;
-    auto [starts, goals] = loadStartGoal(N, "./data/car1order/start_goal/test_starts.npy", "./data/car1order/start_goal/test_goals.npy");
+    const unsigned int N = 5000;
+    auto [starts, goals] = loadStartGoal(N, "./data/car1order/start_goal/train_starts.npy", "./data/car1order/start_goal/train_goals.npy");
+    auto output_filename = "data/car1order/train_traj/train_traj.npz";
 
     for (unsigned int i = 0; i < N; i++) {
-        std::stringstream ss;
-        ss << "data/car1order/test_traj/path" << i << ".csv";
-
-        auto [time, length] = car1order_control(starts[i], goals[i], 0.5, RLMPNet, 60.0, 500.0, ss.str());
+        auto [time, length] = car1order_control(starts[i], goals[i], 0.5, SST, 60.0, 500.0, output_filename, i);
         if (!std::isinf(time)) {
-            std::cout << "Find traj. Save in " << ss.str() << std::endl;
+            std::cout << "Find traj." << std::endl;
         }
     }
 }
