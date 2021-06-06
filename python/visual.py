@@ -127,6 +127,6 @@ def visualize_planning_result(filename: str, obstacle_idx: int, states: np.ndarr
 
 
 if __name__ == "__main__":
-    states = np.loadtxt("data/car1order/test_traj/path0.csv", delimiter=" ")
+    states = np.loadtxt("data/car1order/train_traj/path0.csv", delimiter=" ")
     goal = np.array([-14.6383, 10.3227, - 0.185641])
-    visualize_planning_result("./data/car1order/test_traj/path0.mp4", 0, states, goal)
+    visualize_planning_result("./data/car1order/train_traj/path0.mp4", 0, states, goal)

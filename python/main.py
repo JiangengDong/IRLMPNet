@@ -17,23 +17,25 @@ import json
 
 import numpy as np
 import torch
+from typing import Dict, Tuple, List
 
 from torch import nn, optim, jit
 from torch.distributions import Normal
 from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
+from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 
-from envs import Car1OrderEnv
+from envs import Car1OrderEnv, Env
 from memory import ExperienceReplay
-from models import (ObservationEncoder, ObservationModel, RewardModel,
+from models import (ObservationEncoder, ObservationDecoder, RewardModel,
                     TransitionModel, bottle)
 from planner import MPCPlanner
 from visual import visualize_global_map, visualize_local_map
 
 
-def get_args():
+def get_args() -> argparse.Namespace:
     # Hyperparameters
     parser = argparse.ArgumentParser(description='PlaNet')
     parser.add_argument('--id', type=str, default='default', help='Experiment ID')
@@ -103,7 +105,7 @@ def get_args():
     return args
 
 
-def postprocess_args(args):
+def postprocess_args(args: argparse.Namespace) -> argparse.Namespace:
     # check validity of args and add additional args
     args.overshooting_distance = min(args.chunk_size, args.overshooting_distance)
 
@@ -137,7 +139,7 @@ def save_args(args: argparse.Namespace):
         json.dump(args_dict, f, indent=2)
 
 
-def setup_workdir(args):
+def setup_workdir(args: argparse.Namespace):
     os.makedirs(args.result_dir, exist_ok=True)
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.torchscript_dir, exist_ok=True)
@@ -148,15 +150,15 @@ def setup_workdir(args):
         os.remove(os.path.join(args.tensorboard_dir, filename))
 
 
-def setup_seed(args):
+def setup_seed(args: argparse.Namespace):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.device == torch.device('cuda'):
         torch.cuda.manual_seed(args.seed)
-    # TODO: set env seed here
+    # TODO: set dynamic system/env seed here
 
 
-def setup_env(args):
+def setup_env(args: argparse.Namespace) -> Env:
     env = Car1OrderEnv(
         args.max_episode_length,
         args.action_repeat
@@ -164,7 +166,7 @@ def setup_env(args):
     return env
 
 
-def setup_replay(args, env):
+def setup_replay(args: argparse.Namespace, env: Env) -> ExperienceReplay:
     D = ExperienceReplay(
         args.experience_size,
         env.observation_size,
@@ -176,14 +178,16 @@ def setup_replay(args, env):
         observation, done = env.reset(), False
         while not done:
             action = env.sample_random_action()
-            next_observation, reward, done = env.step(action)
-            D.append(observation, action, reward, done)
+            next_observation, _, done, info = env.step(action)
+            D.append(observation, action, info["reward_dist"], info["reward_coll"], done)
             observation = next_observation
 
     return D
 
 
-def setup_models(args, env):
+def setup_models(args: argparse.Namespace, env: Env) -> Tuple[Tuple[nn.Module, nn.Module, nn.Module, nn.Module],
+                                                              Tuple[optim.Optimizer, optim.Optimizer],
+                                                              List[torch.nn.parameter.Parameter]]:
     # Initialise model parameters randomly
     transition_model = TransitionModel(
         args.belief_size,
@@ -194,7 +198,7 @@ def setup_models(args, env):
         args.activation_function
     ).to(device=args.device)
 
-    observation_model = ObservationModel(
+    observation_model = ObservationDecoder(
         args.belief_size,
         args.state_size,
         args.embedding_size
@@ -213,14 +217,11 @@ def setup_models(args, env):
     param_list = (
         list(transition_model.parameters()) +
         list(observation_model.parameters()) +
-        list(reward_model.parameters()) +
         list(encoder.parameters())
     )
 
-    optimiser = optim.Adam(
-        param_list,
-        lr=0 if args.learning_rate_schedule != 0 else args.learning_rate,
-        eps=args.adam_epsilon)
+    transition_optimizer = optim.Adam(param_list, args.learning_rate, eps=args.adam_epsilon)
+    reward_optimizer = optim.Adam(reward_model.parameters(), args.learning_rate, eps=args.adam_epsilon)
 
     # load parameters
     if args.checkpoint_path is not None:
@@ -230,14 +231,15 @@ def setup_models(args, env):
             observation_model.load_state_dict(model_dicts['observation_model'])
             reward_model.load_state_dict(model_dicts['reward_model'])
             encoder.load_state_dict(model_dicts['encoder'])
-            optimiser.load_state_dict(model_dicts['optimiser'])
+            transition_optimizer.load_state_dict(model_dicts['transition_optimizer'])
+            reward_optimizer.load_state_dict(model_dicts['reward_optimizer'])
         else:
             logging.warning("Model weight file: {} does not exist".format(args.checkpoint_path))
 
-    return (transition_model, observation_model, reward_model, encoder), optimiser, param_list
+    return (transition_model, observation_model, reward_model, encoder), (transition_optimizer, reward_optimizer), param_list
 
 
-def setup_planner(args, env, transition_model, reward_model):
+def setup_planner(args: argparse.Namespace, env: Env, transition_model: nn.Module, reward_model: nn.Module) -> nn.Module:
     planner = MPCPlanner(
         env.action_size,
         args.planning_horizon,
@@ -252,31 +254,42 @@ def setup_planner(args, env, transition_model, reward_model):
     return planner
 
 
-def setup(args):
+def setup(args: argparse.Namespace) -> Tuple[Env,
+                                             ExperienceReplay,
+                                             Tuple[nn.Module, nn.Module, nn.Module, nn.Module],
+                                             Tuple[optim.Optimizer, optim.Optimizer],
+                                             List[nn.parameter.Parameter],
+                                             nn.Module]:
     if not args.test:
         setup_seed(args)
         setup_workdir(args)
         save_args(args)
     env = setup_env(args)
     D = setup_replay(args, env)
-    models, optimiser, param_list = setup_models(args, env)
+    models, optimizers, param_list = setup_models(args, env)
     planner = setup_planner(args, env, models[0], models[2])
 
-    return env, D, models, optimiser, param_list, planner
+    return env, D, models, optimizers, param_list, planner
 
 
-def collect_experience(args, env, models, planner, explore=True, desc="Collecting episode"):
+def collect_experience(args: argparse.Namespace,
+                       env: Env,
+                       models: Tuple[nn.Module, nn.Module, nn.Module, nn.Module],
+                       planner: nn.Module,
+                       explore: bool = True,
+                       desc: str = "Collecting episode") -> Dict[str, List[torch.Tensor]]:
     """collect an episode by applying policy on the real env.
     """
     # unpack models
-    transition_model, observation_model, reward_model, encoder = models
+    transition_model, _, _, encoder = models
     # storage
     experience = {
         "belief": [],
         "state": [],
         "action": [],
         "observation": [],
-        "reward": [],
+        "reward_dist": [],
+        "reward_coll": [],
         "done": []
     }
     with torch.no_grad():
@@ -286,7 +299,7 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
         action = torch.zeros(1, env.action_size, device=args.device)
         observation = env.reset()
 
-        for t in trange(args.max_episode_length // args.action_repeat, leave=False, desc=desc):
+        for _ in trange(args.max_episode_length // args.action_repeat, leave=False, desc=desc):
             # h[t] = f(h[t-1], a[t-1])
             # s[t] ~ Prob(s|h[t])
             # action and observation need extra time dimension because transition model uses batch operation
@@ -295,8 +308,7 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
                 action.unsqueeze(dim=0),
                 belief,
                 encoder(observation.to(device=args.device)).unsqueeze(dim=0))
-            belief, posterior_state = belief.squeeze(
-                dim=0), posterior_state.squeeze(dim=0)
+            belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
 
             # a[t] = pi(h[t], s[t]) + noise
             # action is bounded by action range
@@ -306,14 +318,15 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
             action.clamp_(min=env.action_range[0], max=env.action_range[1])
 
             # o[t+1] ~ Prob(o|x[t], a[t]), r[t+1], z[t+1]
-            next_observation, reward, done = env.step(action[0].cpu())
+            next_observation, _, done, info = env.step(action[0].cpu())
 
             # save h[t], s[t], a[t], o[t], r[t+1], z[t+1]
             experience["belief"].append(belief)
             experience["state"].append(posterior_state)
             experience["action"].append(action.cpu())
             experience["observation"].append(observation)
-            experience["reward"].append(reward)
+            experience["reward_dist"].append(info["reward_dist"])
+            experience["reward_coll"].append(info["reward_coll"])
             experience["done"].append(done)
 
             if done:
@@ -324,12 +337,12 @@ def collect_experience(args, env, models, planner, explore=True, desc="Collectin
     return experience
 
 
-def test(args, env, models, planner):
+def test(args: argparse.Namespace, env: Env, models: Tuple[nn.Module, nn.Module, nn.Module, nn.Module], planner: nn.Module):
     for model in models:
         model.eval()
 
     # unpack models
-    transition_model, observation_model, reward_model, encoder = models
+    _, observation_model, _, _ = models
     # collect an episode
     with torch.no_grad():
         experience = collect_experience(args, env, models, planner, False, desc="Collecting experience 0")
@@ -347,7 +360,13 @@ def test(args, env, models, planner):
         model.train()
 
 
-def train(args, env, D, models, optimiser, param_list, planner):
+def train(args: argparse.Namespace,
+          env: Env,
+          D: ExperienceReplay,
+          models: Tuple[nn.Module, nn.Module, nn.Module, nn.Module],
+          optimizer: Tuple[optim.Optimizer, optim.Optimizer],
+          param_list: List[nn.parameter.Parameter],
+          planner: nn.Module):
     # auxilliary tensors
     global_prior = Normal(
         torch.zeros(args.batch_size, args.state_size, device=args.device),
@@ -359,14 +378,15 @@ def train(args, env, D, models, optimiser, param_list, planner):
 
     # unpack models
     transition_model, observation_model, reward_model, encoder = models
+    transition_optimizer, reward_optimizer = optimizer
 
     for idx_episode in trange(args.episodes, leave=False, desc="Episode"):
         for idx_train in trange(args.collect_interval, leave=False, desc="Training"):
             # Draw sequence chunks {(o[t], a[t], r[t+1], z[t+1])} ~ D uniformly at random from the dataset
-            # The first two dimensions of the tensors are L (chunk size) and n (batch_size)
+            # The first two dimensions of the tensors are L (chunk size) and n (batch size)
             # We want to use o[t+1] to correct the error of the transition model,
             # so we need to convert the sequence to {(o[t+1], a[t], r[t+1], z[t+1])}
-            observations, actions, rewards, nonterminals = D.sample(args.batch_size, args.chunk_size)
+            observations, actions, rewards_dist, rewards_coll, nonterminals = D.sample(args.batch_size, args.chunk_size)
             # Create initial belief and state for time t = 0
             init_belief = torch.zeros(args.batch_size, args.belief_size, device=args.device)
             init_state = torch.zeros(args.batch_size, args.state_size, device=args.device)
@@ -394,13 +414,6 @@ def train(args, env, D, models, optimiser, param_list, planner):
             ).mean()
             observation_loss = visual_loss + symbol_loss
 
-            # reward loss
-            reward_loss = F.mse_loss(
-                bottle(reward_model, (beliefs, posterior_states)),
-                rewards[:-1],
-                reduction='none'
-            ).mean(dim=(0, 1))
-
             # KL divergence loss. Minimize the difference between posterior and prior
             kl_loss = torch.max(
                 kl_divergence(
@@ -419,13 +432,11 @@ def train(args, env, D, models, optimiser, param_list, planner):
             if args.overshooting_kl_beta != 0:
                 overshooting_vars = []  # Collect variables for overshooting to process in batch
                 for t in range(1, args.chunk_size - 1):
-                    d = min(t + args.overshooting_distance,
-                            args.chunk_size - 1)  # Overshooting distance
+                    d = min(t + args.overshooting_distance, args.chunk_size - 1)  # Overshooting distance
                     # Use t_ and d_ to deal with different time indexing for latent states
                     t_, d_ = t - 1, d - 1
                     # Calculate sequence padding so overshooting terms can be calculated in one batch
-                    seq_pad = (0, 0, 0, 0, 0, t - d +
-                               args.overshooting_distance)
+                    seq_pad = (0, 0, 0, 0, 0, t - d + args.overshooting_distance)
                     # Store
                     # * a[t:d],
                     # * z[t+1:d+1]
@@ -441,7 +452,7 @@ def train(args, env, D, models, optimiser, param_list, planner):
                     overshooting_vars.append(
                         (F.pad(actions[t:d], seq_pad),
                          F.pad(nonterminals[t:d], seq_pad),
-                         F.pad(rewards[t:d], seq_pad[2:]),
+                         F.pad(rewards_dist[t:d], seq_pad[2:]),
                          beliefs[t_],
                          prior_states[t_],
                          F.pad(posterior_means[t_ + 1:d_ + 1].detach(), seq_pad),
@@ -463,33 +474,35 @@ def train(args, env, D, models, optimiser, param_list, planner):
                 # Calculate overshooting KL loss with sequence mask
                 kl_loss += (1 / args.overshooting_distance) * args.overshooting_kl_beta * torch.max(
                     (kl_divergence(
-                        Normal(torch.cat(overshooting_vars[5], dim=1), torch.cat(
-                            overshooting_vars[6], dim=1)),
+                        Normal(torch.cat(overshooting_vars[5], dim=1), torch.cat(overshooting_vars[6], dim=1)),
                         Normal(prior_means, prior_std_devs)
                     ) * seq_mask).sum(dim=2),
                     free_nats
                 ).mean(dim=(0, 1)) * (args.chunk_size - 1)  # Update KL loss (compensating for extra average over each overshooting/open loop sequence)
-                # Calculate overshooting reward prediction loss with sequence mask
-                if args.overshooting_reward_scale != 0:
-                    reward_loss += (1 / args.overshooting_distance) * args.overshooting_reward_scale * F.mse_loss(
-                        bottle(reward_model, (beliefs, prior_states)) *
-                        seq_mask[:, :, 0],
-                        torch.cat(overshooting_vars[2], dim=1),
-                        reduction='none'
-                    ).mean(dim=(0, 1)) * (args.chunk_size - 1)  # Update reward loss (compensating for extra average over each overshooting/open loop sequence)
 
-            # Apply linearly ramping learning rate schedule
-            if args.learning_rate_schedule != 0:
-                for group in optimiser.param_groups:
-                    group['lr'] = min(
-                        group['lr'] + args.learning_rate / args.learning_rate_schedule, args.learning_rate)
+            # TODO: add learning rate schedule
             # Update model parameters
-            optimiser.zero_grad()
-            loss = observation_loss * 200 + reward_loss + kl_loss
+            transition_optimizer.zero_grad()
+            loss = observation_loss * 200 + kl_loss
             loss.backward()
-            nn.utils.clip_grad_norm_(
-                param_list, args.grad_clip_norm, norm_type=2)
-            optimiser.step()
+            nn.utils.clip_grad_norm_(param_list, args.grad_clip_norm, norm_type=2)
+            transition_optimizer.step()
+
+            # reward loss
+            rewards_dist_predict, rewards_coll_predict = bottle(reward_model.raw, (beliefs.detach(), posterior_states.detach()))
+            reward_loss = F.mse_loss(
+                rewards_dist_predict,
+                rewards_dist[:-1],
+                reduction='mean'
+            ) + F.binary_cross_entropy(
+                rewards_coll_predict,
+                rewards_coll[:-1],
+                reduction='mean'
+            )
+            reward_optimizer.zero_grad()
+            reward_loss.backward()
+            reward_optimizer.step()
+
             # add tensorboard log
             global_step = idx_train + idx_episode * args.collect_interval
             summary_writter.add_scalar("observation_loss", observation_loss, global_step)
@@ -502,7 +515,8 @@ def train(args, env, D, models, optimiser, param_list, planner):
             for idx_step in range(T):
                 D.append(experience["observation"][idx_step],
                          experience["action"][idx_step],
-                         experience["reward"][idx_step],
+                         experience["reward_dist"][idx_step],
+                         experience["reward_coll"][idx_step],
                          experience["done"][idx_step])
 
         # Checkpoint models
@@ -515,7 +529,8 @@ def train(args, env, D, models, optimiser, param_list, planner):
                     'observation_model': observation_model.state_dict(),
                     'reward_model': reward_model.state_dict(),
                     'encoder': encoder.state_dict(),
-                    'optimiser': optimiser.state_dict()
+                    'transition_optimizer': transition_optimizer.state_dict(),
+                    'reward_optimizer': reward_optimizer.state_dict()
                 },
                 checkpoint_path)
             with open(record_path, "w") as f:

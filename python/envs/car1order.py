@@ -9,14 +9,17 @@
 1. Set a maximum for steps.
 1. Repeat every input action for several times.
 """
-import cv2
 import numpy as np
 import torch
+from typing import Tuple, Dict
+
+from .base import Env
 from .KinoDynSys import Car1OrderSystem
 
 
-class Car1OrderEnv:
-    def __init__(self, max_episode_length, action_repeat):
+class Car1OrderEnv(Env):
+    def __init__(self, max_episode_length, action_repeat, symbolic=False):
+        super().__init__()
         self.system = Car1OrderSystem()
         # fetch config from cpp part
         self.state_dim = self.system.state_dim
@@ -44,19 +47,26 @@ class Car1OrderEnv:
         # other config designated from outside
         self.max_episode_length = max_episode_length
         self.action_repeat = action_repeat
+        self.symbolic = symbolic
 
         # allocate a space for sampling action. This shouldn't be accessed from outside
         self.__action = np.zeros(shape=(self.control_dim, ), dtype=np.float32)
 
-    def get_ob(self):
+    def get_ob(self) -> torch.Tensor:
         # return 1*6 tensor as normalized observation (range: [-0.5, 0.5])
         local_map = self.system.get_local_map(self.state).flatten() - 0.5
         local_map = np.tile(local_map, [3])
         local_map = torch.from_numpy(local_map).unsqueeze(0)
-        state = torch.from_numpy(np.concatenate([self.normalized_state, self.normalized_goal])).unsqueeze(0)
-        return torch.cat([local_map, state], dim=1)
+        if not self.symbolic:
+            goal_map = self.system.get_local_map(self.goal).flatten() - 0.5
+            goal_map = np.tile(goal_map, [3])
+            goal_map = torch.from_numpy(goal_map).unsqueeze(0)
+            return torch.cat([local_map, goal_map], dim=1)
+        else:
+            state = torch.from_numpy(np.concatenate([self.normalized_state, self.normalized_goal])).unsqueeze(0)
+            return torch.cat([local_map, state], dim=1)
 
-    def reset(self):
+    def reset(self) -> torch.Tensor:
         # random start and goal. They are assumed to be easy to sample
         while True:
             if self.system.sample_valid_state(self.state) and self.system.sample_valid_state(self.goal) and np.linalg.norm(self.state-self.goal) < 20:
@@ -69,7 +79,7 @@ class Car1OrderEnv:
 
         return self.get_ob()
 
-    def step(self, action: np.ndarray):  # TODO: change to tensor
+    def step(self, action: torch.Tensor) -> Tuple[torch.Tensor, float, bool, Dict[str, float]]:
         # input action is assumed to be (2, ) ndarray and normalized
         assert action.shape == (self.control_dim, )
         # unnormalize the action
@@ -98,7 +108,7 @@ class Car1OrderEnv:
             if self.step_count == self.max_episode_length or dist < 0.01 or is_collided:
                 self.done = True
 
-        return self.get_ob(), (reward_dist + (-10 if is_collided else 0)), self.done
+        return self.get_ob(), (reward_dist + (-10 if is_collided else 0)), self.done, {"reward_dist": reward_dist, "reward_coll": float(is_collided)}
 
     def render(self, mode="rgb_array"):
         raise NotImplementedError
@@ -110,17 +120,17 @@ class Car1OrderEnv:
         pass
 
     @property
-    def observation_size(self):
-        return 3*64*64+6
+    def observation_size(self) -> int:
+        return 3*64*64+3*64*64
 
     @property
-    def action_size(self):
+    def action_size(self) -> int:
         return 2
 
     @property
-    def action_range(self):
+    def action_range(self) -> Tuple[float, float]:
         return -0.5, 0.5
 
-    def sample_random_action(self):
+    def sample_random_action(self) -> torch.Tensor:
         self.system.sample_valid_control(self.__action)
         return torch.from_numpy((self.__action - self.control_center)/self.control_range)

@@ -1,21 +1,32 @@
-from typing import Optional, List
+from typing import Any, Callable, Iterable, Optional, List, Tuple, Union
 import torch
 from torch import jit, nn
 from torch.nn import functional as F
 
 
-# Wraps the input tuple for a function to process a time*batch*features sequence in batch*features (assumes one output)
-def bottle(f, x_tuple):
-    x_sizes = tuple(map(lambda x: x.size(), x_tuple))
-    y = f(*map(lambda x: x[0].view(x[1][0] * x[1][1], *x[1][2:]), zip(x_tuple, x_sizes)))
-    y_size = y.size()
-    return y.view(x_sizes[0][0], x_sizes[0][1], *y_size[1:])
+# A high-order function. Wraps the input tuple for a function to process a time*batch*features sequence in batch*features (assumes one output)
+def bottle(f: Callable, x_tuple: Tuple[torch.Tensor]) -> Union[torch.Tensor, Tuple[torch.Tensor]]:
+    L = x_tuple[0].shape[0]  # chunk size (time length)
+    n = x_tuple[0].shape[1]  # batch size
+    y = f(*[x.flatten(start_dim=0, end_dim=1) for x in x_tuple])
+    if isinstance(y, torch.Tensor):
+        y_size = y.size()
+        return y.view(L, n, *y_size[1:])
+    else:
+        return tuple(yy.unfold(0, n, n) for yy in y)
 
 
 class TransitionModel(jit.ScriptModule):
     __constants__ = ['min_std_dev']
 
-    def __init__(self, belief_size, state_size, action_size, hidden_size, embedding_size, activation_function='relu', min_std_dev=0.1):
+    def __init__(self,
+                 belief_size: int,
+                 state_size: int,
+                 action_size: int,
+                 hidden_size: int,
+                 embedding_size: int,
+                 activation_function: str = 'relu',
+                 min_std_dev: float = 0.1):
         super().__init__()
         self.act_fn = getattr(F, activation_function)
         self.min_std_dev = min_std_dev
@@ -37,14 +48,13 @@ class TransitionModel(jit.ScriptModule):
     # b : -x--X--X--X--X--X-
     # s : -x--X--X--X--X--X-
     @jit.script_method
-    def forward(
-        self,
-        prev_state: torch.Tensor,
-        actions: torch.Tensor,
-        prev_belief: torch.Tensor,
-        observations: Optional[torch.Tensor] = None,
-        nonterminals: Optional[torch.Tensor] = None
-    ) -> List[torch.Tensor]:
+    def forward(self,
+                prev_state: torch.Tensor,
+                actions: torch.Tensor,
+                prev_belief: torch.Tensor,
+                observations: Optional[torch.Tensor] = None,
+                nonterminals: Optional[torch.Tensor] = None
+                ) -> List[torch.Tensor]:
         # Create lists for hidden states (cannot use single tensor as buffer because autograd won't work with inplace writes)
         T = actions.size(0) + 1
 
@@ -93,17 +103,17 @@ class TransitionModel(jit.ScriptModule):
         return hidden
 
 
-class ObservationModel(jit.ScriptModule):
-    def __init__(self, belief_size, state_size, embedding_size):
+class ObservationDecoder(jit.ScriptModule):
+    def __init__(self, belief_size: int, state_size: int, embedding_size: int):
         super().__init__()
         self.belief_size = belief_size
         self.state_size = state_size
-        self.embedding_size = embedding_size
+        assert embedding_size % 2 == 0
+        self.half_embedding_size = embedding_size // 2
 
         self.stem = nn.Linear(belief_size+state_size, embedding_size)
-        self.visual_input = nn.Linear(embedding_size-6, 256)
         self.visual = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, 5, stride=2),
+            nn.ConvTranspose2d(self.half_embedding_size, 128, 5, stride=2),
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 5, stride=2),
             nn.ReLU(),
@@ -111,29 +121,27 @@ class ObservationModel(jit.ScriptModule):
             nn.ReLU(),
             nn.ConvTranspose2d(32, 3, 6, stride=2)
         )
-        self.symbol = nn.Identity()
 
     @jit.script_method
-    def forward(self, belief, state):
+    def forward(self, belief: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         """
         belief: n*belief_size torch tensor
         state: n*state_size torch tensor
         """
         hidden = self.stem(torch.cat([belief, state], dim=1))
-        hidden1, hidden2 = torch.split(hidden, [self.embedding_size-6, 6], dim=1)
+        hidden1, hidden2 = torch.split(hidden, [self.half_embedding_size, self.half_embedding_size], dim=1)
 
-        hidden1 = self.visual_input(hidden1)
-        visual = self.visual(hidden1.view(-1, 256, 1, 1))
+        visual1 = self.visual(hidden1.view(-1, self.half_embedding_size, 1, 1))
+        visual2 = self.visual(hidden2.view(-1, self.half_embedding_size, 1, 1))
 
-        symbol = self.symbol(hidden2)
-
-        return torch.cat([visual.view(-1, 3*64*64), symbol], dim=1)
+        return torch.cat([visual1.view(-1, 3*64*64), visual2.view(-1, 3*64*64)], dim=1)
 
 
 class ObservationEncoder(jit.ScriptModule):
-    def __init__(self, embedding_size):
+    def __init__(self, embedding_size: int):
         super().__init__()
-        self.embedding_size = embedding_size
+        assert embedding_size % 2 == 0
+        self.half_embedding_size = embedding_size // 2
 
         self.visual_encoder = nn.Sequential(
             nn.Conv2d(3, 32, 4, stride=2),
@@ -145,42 +153,54 @@ class ObservationEncoder(jit.ScriptModule):
             nn.Conv2d(128, 256, 4, stride=2),
             nn.ReLU()
         )
-        self.visual_output = nn.Linear(1024, embedding_size-6)
-        self.symbol_encoder = nn.Sequential(
-            nn.Identity()
-        )
+        self.visual_output = nn.Linear(1024, self.half_embedding_size)
 
     @jit.script_method
-    def forward(self, observation):
+    def forward(self, observation: torch.Tensor) -> torch.Tensor:
         """
         observation: n*observation_size tensor
         """
-        visual, symbol = torch.split(observation, [3*64*64, 6], dim=1)
+        visual1, visual2 = torch.split(observation, [3*64*64, 3*64*64], dim=1)
 
-        hidden1 = self.visual_encoder(visual.view(-1, 3, 64, 64))
+        hidden1 = self.visual_encoder(visual1.view(-1, 3, 64, 64))
         hidden1 = self.visual_output(hidden1.view(-1, 1024))
 
-        hidden2 = self.symbol_encoder(symbol)
+        hidden2 = self.visual_encoder(visual2.view(-1, 3, 64, 64))
+        hidden2 = self.visual_output(hidden2.view(-1, 1024))
 
         return torch.cat([hidden1, hidden2], dim=1)
 
 
 class RewardModel(jit.ScriptModule):
-    def __init__(self, belief_size, state_size, hidden_size):
+    def __init__(self, belief_size: int, state_size: int, hidden_size: int):
         super().__init__()
         self.belief_size = belief_size
         self.state_size = state_size
         self.hidden_size = hidden_size
 
-        self.network = nn.Sequential(
+        self.distance_network = nn.Sequential(
             nn.Linear(belief_size + state_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
+        self.collision_network = nn.Sequential(
+            nn.Linear(belief_size + state_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 1),
+            nn.Sigmoid()
+        )
 
     @jit.script_method
-    def forward(self, belief, state):
-        reward = self.network(torch.cat([belief, state], dim=1)).squeeze()
-        return reward
+    def forward(self, belief: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        reward_dist = self.distance_network(torch.cat([belief, state], dim=1)).squeeze()
+        reward_coll = self.collision_network(torch.cat([belief, state], dim=1)).squeeze()
+        return reward_dist - reward_coll
+
+    def raw(self, belief: torch.Tensor, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        reward_dist = self.distance_network(torch.cat([belief, state], dim=1)).squeeze()
+        reward_coll = self.collision_network(torch.cat([belief, state], dim=1)).squeeze()
+        return (reward_dist, reward_coll)

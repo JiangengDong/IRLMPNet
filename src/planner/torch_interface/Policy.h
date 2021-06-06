@@ -46,7 +46,7 @@ namespace IRLMPNet {
 
         /// WARNING: The start, goal and control are assumed to be real vector
         void act(const ob::State *start, const ob::State *goal, oc::Control *control) {
-            std::vector<double> state_vec(64 * 64 * 3 + 2 * state_dim_);
+            std::vector<double> state_vec(64 * 64 * 3 + 64 * 64 * 3);
             const auto *pstart = start->as<ob::RealVectorStateSpace::StateType>()->values;
             const auto *pgoal = goal->as<ob::RealVectorStateSpace::StateType>()->values;
 
@@ -56,12 +56,17 @@ namespace IRLMPNet {
                 for (unsigned int row = 0; row < 64; row++)
                     for (unsigned int col = 0; col < 64; col++)
                         state_vec[64 * 64 * ch + 64 * row + col] = map(row, col);
-            state_vec[64 * 64 * 3 + 0] = pstart[0] / 25.0;
-            state_vec[64 * 64 * 3 + 1] = pstart[1] / 35.0;
-            state_vec[64 * 64 * 3 + 2] = pstart[2] / M_PI;
-            state_vec[64 * 64 * 3 + 3] = pgoal[0] / 25.0;
-            state_vec[64 * 64 * 3 + 4] = pgoal[1] / 35.0;
-            state_vec[64 * 64 * 3 + 5] = pgoal[2] / M_PI;
+            map = static_cast<IRLMPNet::System::CarCollisionChecker *>(collision_checker_.get())->getLocalMap(goal);
+            for (unsigned int ch = 0; ch < 3; ch++)
+                for (unsigned int row = 0; row < 64; row++)
+                    for (unsigned int col = 0; col < 64; col++)
+                        state_vec[64 * 64 * 3 + 64 * 64 * ch + 64 * row + col] = map(row, col);
+            // state_vec[64 * 64 * 3 + 0] = pstart[0] / 25.0;
+            // state_vec[64 * 64 * 3 + 1] = pstart[1] / 35.0;
+            // state_vec[64 * 64 * 3 + 2] = pstart[2] / M_PI;
+            // state_vec[64 * 64 * 3 + 3] = pgoal[0] / 25.0;
+            // state_vec[64 * 64 * 3 + 4] = pgoal[1] / 35.0;
+            // state_vec[64 * 64 * 3 + 5] = pgoal[2] / M_PI;
 
             torch::NoGradGuard no_grad;
             auto observation = toTensor(state_vec, 64 * 64 * 3 + state_dim_ * 2).to(at::kCUDA);

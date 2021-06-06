@@ -200,14 +200,14 @@ std::tuple<double, double> car1order_control(
 }
 
 int main(int argc, char **argv) {
-    const unsigned int N = 5000;
-    auto [starts, goals] = loadStartGoal(N, "./data/car1order/start_goal/train_starts.npy", "./data/car1order/start_goal/train_goals.npy");
-    auto output_filename = "data/car1order/train_traj/train_traj.npz";
+    const unsigned int N = 500;
+    auto [starts, goals] = loadStartGoal(N, "./data/car1order/test_traj/test_starts.npy", "./data/car1order/test_traj/test_goals.npy");
+    auto output_filename = "data/car1order/test_traj/test_traj.npz";
 
     for (unsigned int i = 0; i < N; i++) {
         auto [time, length] = car1order_control(starts[i], goals[i], 0.5, SST, 60.0, 500.0, output_filename, i);
         if (!std::isinf(time)) {
-            std::cout << "Find traj." << std::endl;
+            std::cout << "Find traj " << i << std::endl;
         }
     }
 }
